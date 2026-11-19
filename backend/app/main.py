@@ -77,8 +77,18 @@ async def seed_initial_data():
                 member_count=1,
             )
             session.add(workspace)
+            await session.flush()
+
+            default_proj = Project(
+                id=f"proj_{uuid.uuid4().hex[:12]}",
+                workspace_id=workspace.id,
+                name="Core Platform",
+                description="Primary platform engineering project",
+                status="active",
+            )
+            session.add(default_proj)
             await session.commit()
-            logger.info("Administrator and initial workspace bootstrapped successfully.")
+            logger.info("Administrator, workspace, and initial project bootstrapped successfully.")
     else:
         logger.info("No ADMIN_EMAIL/ADMIN_PASSWORD configured. Initial user can register via /auth/register or UI.")
 

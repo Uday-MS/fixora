@@ -88,7 +88,7 @@ services:
         destination: /index.html
     envVars:
       - key: VITE_API_URL
-        value: https://fixora-api.onrender.com/api
+        value: https://fixora-api-a2an.onrender.com/api
 
 databases:
   # ----------------------------------------------------------------------------

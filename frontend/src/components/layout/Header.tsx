@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
 import {
   Search,
@@ -8,6 +8,7 @@ import {
   User as UserIcon,
 } from 'lucide-react';
 import { Button } from '@/components/ui/Button';
+import api from '@/services/api';
 
 interface HeaderProps {
   breadcrumbs?: { label: string; href?: string }[];
@@ -16,7 +17,36 @@ interface HeaderProps {
 
 export function Header({ breadcrumbs, onConnectRepo }: HeaderProps) {
   const [searchVal, setSearchVal] = useState('');
+  const [sandboxInfo, setSandboxInfo] = useState<{
+    status: string;
+    mode: string;
+    isolated: boolean;
+  }>({
+    status: 'checking',
+    mode: 'checking',
+    isolated: false,
+  });
   const navigate = useNavigate();
+
+  useEffect(() => {
+    let isMounted = true;
+    api
+      .get<{ sandbox_status?: string; sandbox_mode?: string }>('/health')
+      .then((res: any) => {
+        if (!isMounted) return;
+        const status = res.sandbox_status || 'blocked_by_configuration';
+        const mode = res.sandbox_mode || 'unavailable';
+        const isolated = status === 'ready' && (mode === 'isolated_docker' || mode === 'remote_container_worker');
+        setSandboxInfo({ status, mode, isolated });
+      })
+      .catch(() => {
+        if (!isMounted) return;
+        setSandboxInfo({ status: 'unavailable', mode: 'unavailable', isolated: false });
+      });
+    return () => {
+      isMounted = false;
+    };
+  }, []);
 
   return (
     <header className="fixed top-0 left-72 right-0 h-16 bg-surface-container-lowest/90 backdrop-blur-md border-b border-surface-container-highest z-40 px-space-lg flex items-center justify-between gap-space-md">
@@ -68,11 +98,26 @@ export function Header({ breadcrumbs, onConnectRepo }: HeaderProps) {
 
       {/* Right Controls */}
       <div className="flex items-center gap-space-md shrink-0">
-        {/* Docker Sandbox Indicator */}
-        <div className="hidden xl:flex items-center gap-1.5 px-2.5 py-1 rounded-md bg-surface-container-low border border-surface-container-highest">
-          <span className="w-2 h-2 rounded-full bg-primary-container animate-pulse" />
+        {/* Sandbox Status Indicator */}
+        <div
+          className="hidden xl:flex items-center gap-1.5 px-2.5 py-1 rounded-md bg-surface-container-low border border-surface-container-highest"
+          title={
+            sandboxInfo.isolated
+              ? 'Docker container sandbox is operational and isolated.'
+              : 'Container isolation not configured. Untrusted host execution blocked by security policy.'
+          }
+        >
+          <span
+            className={`w-2 h-2 rounded-full ${
+              sandboxInfo.isolated ? 'bg-emerald-500 animate-pulse' : 'bg-amber-500'
+            }`}
+          />
           <Terminal className="w-3.5 h-3.5 text-on-surface-variant" />
-          <span className="font-mono text-mono-tag text-on-surface">Docker Sandbox: Ready (Isolated)</span>
+          <span className="font-mono text-mono-tag text-on-surface">
+            {sandboxInfo.isolated
+              ? 'Docker Sandbox: Ready (Isolated)'
+              : 'Sandbox: Container Worker Required'}
+          </span>
         </div>
 
         {/* Connect Repository Action Button */}

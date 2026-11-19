@@ -9,6 +9,7 @@ from app.models.ingestion_job import IngestionJob
 from app.models.repository import Repository
 from app.models.project import Project
 from app.services.ingestion_service import IngestionService
+from app.services.repository_service import ensure_project_id
 from app.schemas.ingestion import (
     RepoZipUploadResponse,
     DocumentUploadResponse,
@@ -30,12 +31,7 @@ async def upload_standalone_repository_zip(
     if not file.filename or not file.filename.endswith(".zip"):
         raise HTTPException(status_code=400, detail="Only .zip files are supported for repository upload")
 
-    p_id = projectId
-    if not p_id:
-        p_stmt = select(Project).limit(1)
-        p_res = await db.execute(p_stmt)
-        p_obj = p_res.scalars().first()
-        p_id = p_obj.id if p_obj else "default-project"
+    p_id = await ensure_project_id(db, projectId)
 
     repo_name = name or os.path.splitext(file.filename)[0]
     repo = Repository(

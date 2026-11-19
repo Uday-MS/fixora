@@ -1,4 +1,17 @@
-const API_BASE_URL = import.meta.env.VITE_API_URL || '/api';
+function resolveApiBaseUrl(): string {
+  // If explicitly configured during build or runtime
+  if (import.meta.env.VITE_API_URL && import.meta.env.VITE_API_URL.trim()) {
+    return import.meta.env.VITE_API_URL.trim();
+  }
+  // When running on Render in production without VITE_API_URL, default directly to the actual production backend
+  if (typeof window !== 'undefined' && window.location.hostname.includes('render.com')) {
+    return 'https://fixora-api-a2an.onrender.com/api';
+  }
+  // Local development default (proxied via Vite dev server)
+  return '/api';
+}
+
+const API_BASE_URL = resolveApiBaseUrl();
 
 export class ApiError extends Error {
   statusCode: number;
@@ -28,6 +41,10 @@ class ApiClient {
     localStorage.removeItem('fixora_token');
   }
 
+  getBaseUrl(): string {
+    return this.baseUrl;
+  }
+
   private async request<T>(endpoint: string, options: RequestInit & { params?: Record<string, string> } = {}): Promise<T> {
     const { params, ...init } = options;
     let url = `${this.baseUrl}${endpoint}`;
@@ -48,14 +65,18 @@ class ApiClient {
     try {
       const response = await fetch(url, { ...init, headers });
       if (!response.ok) {
-        const errData = await response.json().catch(() => ({ message: response.statusText || 'Request failed' }));
-        throw new ApiError(errData.message || 'Request failed', response.status);
+        const errData = await response.json().catch(() => ({ message: response.statusText || `Request failed (HTTP ${response.status})` }));
+        throw new ApiError(errData.detail || errData.message || `Request failed (HTTP ${response.status})`, response.status);
       }
       if (response.status === 204) return {} as T;
       return await response.json();
     } catch (err: any) {
       if (err instanceof ApiError) throw err;
-      throw new ApiError(err.message || 'Network error connecting to Fixora backend', 503);
+      const isNetworkError = err?.name === 'TypeError' || err?.message === 'Failed to fetch';
+      const detailMsg = isNetworkError
+        ? `Network connection error: Unable to communicate with FIXORA API at ${this.baseUrl}. Please check internet connectivity or service availability.`
+        : (err?.message || 'Network error connecting to Fixora backend');
+      throw new ApiError(detailMsg, 503);
     }
   }
 
@@ -85,16 +106,24 @@ class ApiClient {
     }
     const headers: Record<string, string> = {};
     if (this.token) headers['Authorization'] = `Bearer ${this.token}`;
-    return fetch(`${this.baseUrl}${endpoint}`, {
+    const url = `${this.baseUrl}${endpoint}`;
+    return fetch(url, {
       method: 'POST',
       body: formData,
       headers,
     }).then(async res => {
       if (!res.ok) {
-        const err = await res.json().catch(() => ({ detail: 'Upload failed' }));
-        throw new ApiError(err.detail || err.message || 'Upload failed', res.status);
+        const err = await res.json().catch(() => ({ detail: `Upload failed (HTTP ${res.status}: ${res.statusText})` }));
+        throw new ApiError(err.detail || err.message || `Upload failed (HTTP ${res.status})`, res.status);
       }
       return res.json() as Promise<T>;
+    }).catch((err: any) => {
+      if (err instanceof ApiError) throw err;
+      const isNetworkError = err?.name === 'TypeError' || err?.message === 'Failed to fetch';
+      const detailMsg = isNetworkError
+        ? `Network connection error: Unable to upload file to FIXORA API at ${url}. Please check service availability.`
+        : (err?.message || 'Upload failed due to network error');
+      throw new ApiError(detailMsg, 503);
     });
   }
 }

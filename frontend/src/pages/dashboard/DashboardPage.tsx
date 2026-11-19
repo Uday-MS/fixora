@@ -25,6 +25,7 @@ import { dashboardService } from '@/services/dashboard';
 import { repositoryService } from '@/services/repositories';
 import { incidentService } from '@/services/incidents';
 import { patchService } from '@/services/patches';
+import api from '@/services/api';
 import type { DashboardStats, Repository, Incident, Patch } from '@/types';
 
 export function DashboardPage() {
@@ -33,6 +34,7 @@ export function DashboardPage() {
   const [repos, setRepos] = useState<Repository[]>([]);
   const [incidents, setIncidents] = useState<Incident[]>([]);
   const [patches, setPatches] = useState<Patch[]>([]);
+  const [sandboxIsolated, setSandboxIsolated] = useState(false);
   const [isLoading, setIsLoading] = useState(true);
 
   const loadDashboardData = async () => {
@@ -48,6 +50,12 @@ export function DashboardPage() {
       if (reposRes?.data) setRepos(reposRes.data);
       if (incRes?.data) setIncidents(incRes.data);
       if (patchesRes?.data) setPatches(patchesRes.data);
+
+      api.get<{ sandbox_status?: string; sandbox_mode?: string }>('/health')
+        .then((res: any) => {
+          setSandboxIsolated(res?.sandbox_status === 'ready');
+        })
+        .catch(() => setSandboxIsolated(false));
     } catch (err) {
       console.error('Error loading dashboard data:', err);
     } finally {
@@ -261,8 +269,12 @@ export function DashboardPage() {
                     <span>Zero active critical outages</span>
                   </div>
                   <div className="flex items-center gap-2 text-on-surface-variant text-xs">
-                    <ShieldCheck className="w-4 h-4 text-primary shrink-0" />
-                    <span>Docker Sandbox execution runner operational</span>
+                    <ShieldCheck className={`w-4 h-4 shrink-0 ${sandboxIsolated ? 'text-primary' : 'text-amber-500'}`} />
+                    <span>
+                      {sandboxIsolated
+                        ? 'Docker Sandbox execution runner operational'
+                        : 'Sandbox: External Container Worker Required'}
+                    </span>
                   </div>
                   <div className="flex items-center gap-2 text-on-surface-variant text-xs">
                     <Clock className="w-4 h-4 text-primary shrink-0" />

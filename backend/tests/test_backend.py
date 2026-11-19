@@ -262,3 +262,64 @@ async def test_autopatch_studio_endpoints():
         assert "id" in draft_data
         assert draft_data["status"] == "draft"
 
+
+def test_alembic_db_url_normalization_and_driver_selection():
+    """
+    Verify Alembic synchronous migration URL normalization:
+    1. postgresql+asyncpg:// -> postgresql+psycopg2://
+    2. postgresql:// -> postgresql+psycopg2://
+    3. postgres:// -> postgresql+psycopg2://
+    4. sqlite+aiosqlite:// -> sqlite://
+    5. ssl=require -> sslmode=require
+    6. Verifies SQLAlchemy selects psycopg2 dialect/driver and does not default to psycopg (v3).
+    """
+    import importlib.util
+    from pathlib import Path
+    from sqlalchemy import create_engine
+
+    env_path = Path(__file__).resolve().parent.parent / "alembic" / "env.py"
+    spec = importlib.util.spec_from_file_location("custom_alembic_env", str(env_path))
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    get_sync_db_url = mod.get_sync_db_url
+
+    test_cases = [
+        (
+            "postgresql+asyncpg://fixora:pass@dpg-xxx.oregon.render.com/fixora?ssl=require",
+            "postgresql+psycopg2://fixora:pass@dpg-xxx.oregon.render.com/fixora?sslmode=require",
+            "postgresql",
+            "psycopg2",
+        ),
+        (
+            "postgresql://fixora:pass@dpg-xxx.oregon.render.com/fixora",
+            "postgresql+psycopg2://fixora:pass@dpg-xxx.oregon.render.com/fixora",
+            "postgresql",
+            "psycopg2",
+        ),
+        (
+            "postgres://fixora:pass@dpg-xxx.oregon.render.com/fixora?sslmode=require",
+            "postgresql+psycopg2://fixora:pass@dpg-xxx.oregon.render.com/fixora?sslmode=require",
+            "postgresql",
+            "psycopg2",
+        ),
+        (
+            "sqlite+aiosqlite:///./test.db",
+            "sqlite:///./test.db",
+            "sqlite",
+            "pysqlite",
+        ),
+        (
+            "sqlite:///./test.db",
+            "sqlite:///./test.db",
+            "sqlite",
+            "pysqlite",
+        ),
+    ]
+
+    for raw, expected_url, exp_dialect, exp_driver in test_cases:
+        res = get_sync_db_url(raw)
+        assert res == expected_url, f"Expected {expected_url}, got {res}"
+        eng = create_engine(res)
+        assert eng.dialect.name == exp_dialect
+        assert eng.dialect.driver == exp_driver
+

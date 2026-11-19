@@ -11,49 +11,67 @@ from app.core.config import settings
 from app.db.session import Base
 import app.models  # Registers all models
 
-config = context.config
+def get_sync_db_url(url: str) -> str:
+    """
+    Normalizes database URL for synchronous Alembic migrations.
+    Explicitly uses the psycopg2 driver for PostgreSQL to prevent SQLAlchemy
+    from defaulting to the missing psycopg (Psycopg 3) driver.
+    """
+    if url.startswith("postgresql+asyncpg://"):
+        url = url.replace("postgresql+asyncpg://", "postgresql+psycopg2://", 1)
+    elif url.startswith("postgresql://"):
+        url = url.replace("postgresql://", "postgresql+psycopg2://", 1)
+    elif url.startswith("postgres://"):
+        url = url.replace("postgres://", "postgresql+psycopg2://", 1)
+    elif url.startswith("sqlite+aiosqlite://"):
+        url = url.replace("sqlite+aiosqlite://", "sqlite://", 1)
 
-if config.config_file_name is not None:
-    fileConfig(config.config_file_name)
+    # Preserve PostgreSQL SSL configuration using sslmode=require where required by Render
+    if "ssl=require" in url:
+        url = url.replace("ssl=require", "sslmode=require")
 
-# Set DB URL dynamically
-sync_url = settings.DATABASE_URL.replace("+asyncpg", "").replace("+aiosqlite", "")
-if sync_url.startswith("postgres://"):
-    sync_url = sync_url.replace("postgres://", "postgresql://", 1)
-if "ssl=require" in sync_url:
-    sync_url = sync_url.replace("ssl=require", "sslmode=require")
-config.set_main_option("sqlalchemy.url", sync_url)
+    return url
 
-target_metadata = Base.metadata
+if hasattr(context, "config") and context.config is not None:
+    config = context.config
 
-def run_migrations_offline() -> None:
-    url = config.get_main_option("sqlalchemy.url")
-    context.configure(
-        url=url,
-        target_metadata=target_metadata,
-        literal_binds=True,
-        dialect_opts={"paramstyle": "named"},
-    )
+    if config.config_file_name is not None:
+        fileConfig(config.config_file_name)
 
-    with context.begin_transaction():
-        context.run_migrations()
+    # Set DB URL dynamically
+    sync_url = get_sync_db_url(settings.DATABASE_URL)
+    config.set_main_option("sqlalchemy.url", sync_url)
 
-def run_migrations_online() -> None:
-    connectable = engine_from_config(
-        config.get_section(config.config_ini_section, {}),
-        prefix="sqlalchemy.",
-        poolclass=pool.NullPool,
-    )
+    target_metadata = Base.metadata
 
-    with connectable.connect() as connection:
+    def run_migrations_offline() -> None:
+        url = config.get_main_option("sqlalchemy.url")
         context.configure(
-            connection=connection, target_metadata=target_metadata
+            url=url,
+            target_metadata=target_metadata,
+            literal_binds=True,
+            dialect_opts={"paramstyle": "named"},
         )
 
         with context.begin_transaction():
             context.run_migrations()
 
-if context.is_offline_mode():
-    run_migrations_offline()
-else:
-    run_migrations_online()
+    def run_migrations_online() -> None:
+        connectable = engine_from_config(
+            config.get_section(config.config_ini_section, {}),
+            prefix="sqlalchemy.",
+            poolclass=pool.NullPool,
+        )
+
+        with connectable.connect() as connection:
+            context.configure(
+                connection=connection, target_metadata=target_metadata
+            )
+
+            with context.begin_transaction():
+                context.run_migrations()
+
+    if context.is_offline_mode():
+        run_migrations_offline()
+    else:
+        run_migrations_online()

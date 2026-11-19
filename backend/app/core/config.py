@@ -42,8 +42,9 @@ class Settings(BaseSettings):
     # AI & Reasoning Providers
     OPENAI_API_KEY: Optional[str] = None
     OPENAI_MODEL: str = "gpt-4o-mini"
+    GEMINI_KEY: Optional[str] = None
     GEMINI_API_KEY: Optional[str] = None
-    GEMINI_MODEL: str = "gemini-2.5-flash"
+    GEMINI_MODEL: str = "gemini-flash-latest"
     ANTHROPIC_API_KEY: Optional[str] = None
 
     # Sandbox

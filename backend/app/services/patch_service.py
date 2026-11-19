@@ -474,21 +474,23 @@ class PatchService:
         )
 
         if gemini_key:
-            try:
-                async with httpx.AsyncClient(timeout=30.0) as client:
-                    res = await client.post(
-                        f"https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key={gemini_key}",
-                        json={"contents": [{"parts": [{"text": prompt}]}]},
-                    )
-                    if res.status_code == 200:
-                        data = res.json()
-                        text = data.get("candidates", [{}])[0].get("content", {}).get("parts", [{}])[0].get("text", "")
-                        if text and len(text) > 20:
-                            text = re.sub(r'^```[a-zA-Z]*\n', '', text)
-                            text = re.sub(r'\n```$', '', text)
-                            return text
-            except Exception as e:
-                logger.warning("Gemini LLM fix failed: %s", str(e))
+            gemini_model = getattr(settings, "GEMINI_MODEL", "gemini-flash-latest")
+            for model_candidate in [gemini_model, "gemini-flash-latest", "gemini-pro-latest"]:
+                try:
+                    async with httpx.AsyncClient(timeout=15.0) as client:
+                        res = await client.post(
+                            f"https://generativelanguage.googleapis.com/v1beta/models/{model_candidate}:generateContent?key={gemini_key}",
+                            json={"contents": [{"parts": [{"text": prompt}]}]},
+                        )
+                        if res.status_code == 200:
+                            data = res.json()
+                            text = data.get("candidates", [{}])[0].get("content", {}).get("parts", [{}])[0].get("text", "")
+                            if text and len(text) > 20:
+                                text = re.sub(r'^```[a-zA-Z]*\n', '', text)
+                                text = re.sub(r'\n```$', '', text)
+                                return text
+                except Exception as e:
+                    logger.warning("Gemini LLM fix with %s failed: %s", model_candidate, str(e))
 
         if openai_key:
             try:

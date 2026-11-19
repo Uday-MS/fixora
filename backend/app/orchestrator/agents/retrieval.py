@@ -12,7 +12,7 @@ class RetrievalAgent:
         """
         triage = state.get("triage_result", {})
         error_ctx = state.get("error_context", {})
-        service_name = triage.get("affectedService", "payment-service")
+        service_name = triage.get("affectedService") or state.get("repository_id") or "application"
         category = triage.get("errorCategory", "")
         message = error_ctx.get("message", "")
         project_id = state.get("project_id", "proj_demo_001")
@@ -29,7 +29,7 @@ class RetrievalAgent:
 
         # GraphRAG topology context
         deps = graph_rag.get_service_dependencies(service_name)
-        incident_id = state.get("incident_id") or "inc_demo_001"
+        incident_id = state.get("incident_id") or "inc_active"
         blast_radius = graph_rag.get_incident_blast_radius(incident_id)
 
         graph_context = []

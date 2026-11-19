@@ -9,8 +9,8 @@ class DiagnosticAgent:
         Determines the safe reproduction command and isolated test strategy.
         """
         rca = state.get("rca_result", {})
-        affected_file = rca.get("affected_file", "services/payment/pool.py")
-        service_name = rca.get("affected_service", "payment-service")
+        affected_file = rca.get("affected_file") or "src/application/handler.py"
+        service_name = rca.get("affected_service") or state.get("repository_id") or "application"
 
         diagnostic_output = {
             "hypothesis_verified": True,

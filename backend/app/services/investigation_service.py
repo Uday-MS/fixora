@@ -83,7 +83,7 @@ class InvestigationService:
         ctx = error_context or {
             "message": question,
             "service_name": repo_name,
-            "stack_trace": f"Traceback (most recent call last):\n  File '{repo_name}/app.py', line 42, in process\nTimeoutError: Connection pool exhausted under burst load",
+            "stack_trace": "",
         }
 
         # Run multi-agent graph

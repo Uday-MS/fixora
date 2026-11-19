@@ -44,7 +44,7 @@ incident_orchestrator = create_incident_orchestration_graph()
 async def run_incident_investigation(
     error_context: Dict[str, Any],
     project_id: str = "proj_demo_001",
-    repository_id: Optional[str] = "payment-service",
+    repository_id: Optional[str] = None,
     incident_id: Optional[str] = None,
     operating_mode: str = "post_deployment",
 ) -> AgentState:

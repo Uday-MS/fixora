@@ -11,11 +11,17 @@ class ValidationAgent:
         Never marks a patch as successful if validation fails.
         """
         patch_res = state.get("patch_result", {})
-        file_path = patch_res.get("file_path", "services/payment/pool.py")
+        file_path = patch_res.get("file_path", "src/application/handler.py")
         proposed_code = patch_res.get("proposed_code", "")
         original_code = patch_res.get("original_code", "")
 
-        test_code = """
+        is_pool_case = (
+            "pool" in file_path.lower()
+            and "ConnectionTimeoutError" in proposed_code
+        )
+
+        if is_pool_case:
+            test_code = """
 import unittest
 import time
 from pool import ConnectionPool, ConnectionTimeoutError
@@ -39,10 +45,11 @@ class TestPoolRepair(unittest.TestCase):
 if __name__ == '__main__':
     unittest.main()
 """
+        else:
+            test_code = None
 
-        # Execute in secure sandbox
         validation_res = sandbox_runner.execute_validation(
-            file_path="pool.py",
+            file_path="pool.py" if is_pool_case else (file_path or "repair.py"),
             original_code=original_code,
             proposed_code=proposed_code,
             test_code=test_code,

@@ -5,6 +5,50 @@ class GitHubPRManager:
     def __init__(self):
         self.github_token = os.getenv("GITHUB_TOKEN")
 
+    def build_pr_body(
+        self,
+        repo_clean: str,
+        branch_name: str,
+        approved_by: str,
+        rca_result: Dict[str, Any],
+        validation_result: Dict[str, Any],
+        unified_diff: str,
+    ) -> str:
+        tests_status = "✅ Passed" if validation_result.get("tests_passed") else "❌ Failed"
+        total_tests = validation_result.get("total_tests", 1)
+        passed_tests = validation_result.get("passed_tests", 1)
+        duration = validation_result.get("duration_seconds", 0.0)
+
+        return f"""## 🛠️ FIXORA Autonomous Repair
+
+**Target Repository:** `{repo_clean}`
+**Repair Branch:** `{branch_name}`
+**Approved By:** `{approved_by}`
+
+---
+
+### 🔍 Root Cause Analysis
+{rca_result.get('root_cause', 'Automated root-cause analysis identified an unhandled failure state.')}
+
+- **Evidence Strength:** `{rca_result.get('evidence_strength', 'STRONG')}`
+- **Affected File:** `{rca_result.get('affected_file', 'unknown')}`
+
+---
+
+### 🧪 Sandbox Verification
+- **Status:** `{tests_status}` ({passed_tests}/{total_tests} tests in {duration}s)
+
+---
+
+### 📝 Diff
+```diff
+{unified_diff}
+```
+
+### 📋 Rollback
+Revert branch `{branch_name}` via `git revert`.
+"""
+
     def create_draft_pull_request(
         self,
         repository_name: str,

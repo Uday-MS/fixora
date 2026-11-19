@@ -13,7 +13,7 @@ class TriageAgent:
         error_ctx = state.get("error_context", {})
         message = (error_ctx.get("message", "") or "").lower()
         stack_trace = (error_ctx.get("stack_trace", "") or "").lower()
-        service_name = error_ctx.get("service_name") or "payment-service"
+        service_name = error_ctx.get("service_name") or state.get("repository_id") or "application"
         mode = state.get("operating_mode") or "post_deployment"
 
         combined_text = f"{message} {stack_trace}"
@@ -22,7 +22,7 @@ class TriageAgent:
         category = "runtime_exception"
         severity = "MEDIUM"
 
-        if "connection pool" in combined_text or "pool exhausted" in combined_text or "database timeout" in combined_text:
+        if "connection pool" in combined_text or "pool exhausted" in combined_text or "pool exhaustion" in combined_text or "database pool" in combined_text or "database timeout" in combined_text:
             category = "database_connection_pool_exhaustion"
             severity = "CRITICAL"
         elif "timeout" in combined_text or "timed out" in combined_text or "deadline exceeded" in combined_text:

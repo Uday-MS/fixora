@@ -15,7 +15,7 @@ class PostmortemAgent:
         patch = state.get("patch_result", {})
         graph = state.get("graph_context", [])
 
-        service_name = triage.get("affectedService", "payment-service")
+        service_name = triage.get("affectedService") or "application"
         severity = triage.get("severity", "CRITICAL")
         error_cat = triage.get("errorCategory", "runtime_exception")
 
@@ -27,11 +27,11 @@ class PostmortemAgent:
             ),
             "timeline": [
                 {"timestamp": "T-15m", "event": f"Telemetry anomaly detected in {service_name}"},
-                {"timestamp": "T-12m", "event": "Triage Agent classified incident as CRITICAL database pool exhaustion"},
+                {"timestamp": "T-12m", "event": f"Triage Agent classified incident as {severity} {error_cat}"},
                 {"timestamp": "T-08m", "event": "Retrieval Agent retrieved runbooks and GraphRAG dependency chain"},
-                {"timestamp": "T-05m", "event": "Root Cause Analysis isolated unbounded acquire timeout in pool.py"},
-                {"timestamp": "T-02m", "event": "AutoPatch generated clean unified diff"},
-                {"timestamp": "T-00m", "event": "Diagnostic Sandbox validated 2/2 unit assertions passing without regression"},
+                {"timestamp": "T-05m", "event": f"Root Cause Analysis isolated defect in {rca.get('affected_file', 'source code')}"},
+                {"timestamp": "T-02m", "event": f"AutoPatch generated unified diff for {patch.get('file_path', 'target file')}"},
+                {"timestamp": "T-00m", "event": f"Sandbox validated {val.get('passed_tests', 0)}/{val.get('total_tests', 1)} assertions"},
             ],
             "impact": {
                 "primaryService": service_name,

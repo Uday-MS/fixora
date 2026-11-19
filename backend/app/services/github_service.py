@@ -112,18 +112,10 @@ class GitHubService:
                     )
                 if res.status_code == 403 and "rate limit" in res.text.lower():
                     logger.warning("GitHub API rate limit exceeded for unauthenticated request.")
-                    # Return informative simulated metadata if rate limited in demo environments
-                    return {
-                        "name": repo,
-                        "full_name": f"{owner}/{repo}",
-                        "default_branch": "main",
-                        "description": f"Imported GitHub repository {owner}/{repo}",
-                        "language": "Python",
-                        "open_issues_count": 2,
-                        "stargazers_count": 10,
-                        "forks_count": 3,
-                        "rate_limited": True,
-                    }
+                    raise HTTPException(
+                        status_code=429,
+                        detail="GitHub API rate limit reached. Please configure a GitHub Token in Settings."
+                    )
                 res.raise_for_status()
                 return res.json()
             except httpx.RequestError as e:
@@ -463,6 +455,99 @@ class GitHubService:
         await db.commit()
         await db.refresh(repo)
         return repo
+
+    @staticmethod
+    async def create_branch_and_draft_pr(
+        owner: str,
+        repo: str,
+        file_path: str,
+        new_content: str,
+        branch_name: str,
+        pr_title: str,
+        pr_body: str,
+        base_branch: str = "main",
+        token: Optional[str] = None,
+    ) -> Dict[str, Any]:
+        """Creates a real branch, commits the patched file, and opens a draft PR via GitHub REST API."""
+        import base64
+        headers = GitHubService.get_headers(token)
+        api = f"https://api.github.com/repos/{owner}/{repo}"
+
+        async with httpx.AsyncClient(timeout=20.0) as client:
+            # 1. Get base branch SHA
+            ref_res = await client.get(f"{api}/git/ref/heads/{base_branch}", headers=headers)
+            if ref_res.status_code != 200:
+                raise HTTPException(status_code=400, detail=f"Could not resolve base branch '{base_branch}'")
+            base_sha = ref_res.json()["object"]["sha"]
+
+            # 2. Create new branch
+            create_ref = await client.post(
+                f"{api}/git/refs",
+                headers=headers,
+                json={"ref": f"refs/heads/{branch_name}", "sha": base_sha},
+            )
+            if create_ref.status_code == 422:
+                logger.info("Branch %s already exists, reusing", branch_name)
+            elif create_ref.status_code not in (200, 201):
+                raise HTTPException(status_code=400, detail=f"Failed to create branch: {create_ref.text}")
+
+            # 3. Get current file SHA (if exists)
+            file_res = await client.get(f"{api}/contents/{file_path}?ref={branch_name}", headers=headers)
+            file_sha = file_res.json().get("sha") if file_res.status_code == 200 else None
+
+            # 4. Commit file
+            encoded = base64.b64encode(new_content.encode("utf-8")).decode("utf-8")
+            commit_payload = {
+                "message": f"fix: {pr_title}",
+                "content": encoded,
+                "branch": branch_name,
+            }
+            if file_sha:
+                commit_payload["sha"] = file_sha
+
+            commit_res = await client.put(
+                f"{api}/contents/{file_path}",
+                headers=headers,
+                json=commit_payload,
+            )
+            if commit_res.status_code not in (200, 201):
+                raise HTTPException(status_code=400, detail=f"Failed to commit file: {commit_res.text}")
+
+            # 5. Check for existing PR to avoid duplicates
+            pr_list = await client.get(
+                f"{api}/pulls?head={owner}:{branch_name}&state=open",
+                headers=headers,
+            )
+            if pr_list.status_code == 200 and pr_list.json():
+                existing = pr_list.json()[0]
+                return {
+                    "status": "existing_pr",
+                    "prNumber": existing["number"],
+                    "prUrl": existing["html_url"],
+                }
+
+            # 6. Create draft PR
+            pr_res = await client.post(
+                f"{api}/pulls",
+                headers=headers,
+                json={
+                    "title": pr_title,
+                    "body": pr_body,
+                    "head": branch_name,
+                    "base": base_branch,
+                    "draft": True,
+                },
+            )
+            if pr_res.status_code not in (200, 201):
+                raise HTTPException(status_code=400, detail=f"Failed to create PR: {pr_res.text}")
+
+            pr_data = pr_res.json()
+            return {
+                "status": "draft_created",
+                "prNumber": pr_data["number"],
+                "prUrl": pr_data["html_url"],
+                "branchName": branch_name,
+            }
 
     @staticmethod
     def verify_webhook_signature(payload_bytes: bytes, signature_header: Optional[str]) -> bool:

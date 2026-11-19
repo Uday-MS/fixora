@@ -14,29 +14,55 @@ class RootCauseAnalysisAgent:
         graph_ctx = state.get("graph_context", [])
         error_ctx = state.get("error_context", {})
         category = triage.get("errorCategory", "runtime_exception")
-        service_name = triage.get("affectedService", "payment-service")
+        service_name = triage.get("affectedService") or state.get("repository_id") or "application"
 
-        affected_file = "services/payment/pool.py"
-        probable_cause = ""
+        # Dynamically determine affected file from evidence or error context
+        affected_file = None
+        stack_trace = error_ctx.get("stack_trace", "")
+
+        # Try to extract file from stack trace
+        if stack_trace:
+            import re
+            file_matches = re.findall(r"File ['\"]([^'\"]+)['\"]", stack_trace)
+            if file_matches:
+                affected_file = file_matches[-1]
+
+        # Try from retrieved evidence
+        if not affected_file and evidence:
+            for chunk in evidence:
+                if isinstance(chunk, dict) and chunk.get("file_path"):
+                    affected_file = chunk["file_path"]
+                    break
+
+        # Fallback based on category or refine basename
+        if not affected_file or affected_file == "pool.py":
+            if "pool" in category or "connection_pool" in category:
+                affected_file = "services/payment/pool.py" if "payment" in service_name else f"src/{service_name}/pool.py"
+            elif "timeout" in category:
+                affected_file = "services/payment/gateway.py" if "payment" in service_name else f"src/{service_name}/gateway.py"
+            else:
+                affected_file = f"src/{service_name}/handler.py"
+
         evidence_strength = "STRONG"
         confirmed_vs_hyp = "CONFIRMED"
+        probable_cause = ""
 
         if "connection_pool" in category:
-            affected_file = "services/payment/pool.py"
             probable_cause = (
                 f"Connection pool leak in {service_name}: Database connection pool exhausted during high-concurrency "
-                "card charge requests without an acquire timeout or exponential backoff release fallback. "
+                "requests without an acquire timeout or exponential backoff release fallback. "
                 "Under surge traffic, all worker threads block indefinitely awaiting available connections."
             )
         elif "timeout" in category:
-            affected_file = "services/payment/gateway.py"
             probable_cause = (
-                f"Downstream gateway deadline exceeded in {service_name}: Stripe client HTTP timeout was configured "
-                "to 60s without circuit breaker or fast-fail retry jitter, causing worker thread pool starvation."
+                f"Downstream gateway deadline exceeded in {service_name}: HTTP timeout was configured "
+                "without circuit breaker or fast-fail retry jitter, causing worker thread pool starvation."
             )
         else:
-            affected_file = "services/payment/handler.py"
-            probable_cause = f"Unhandled exception in {service_name} during request processing."
+            probable_cause = (
+                f"Unhandled exception in {service_name} during request processing. "
+                f"Error context: {error_ctx.get('message', 'unknown error')[:200]}"
+            )
             evidence_strength = "MODERATE"
             confirmed_vs_hyp = "AI_HYPOTHESIS"
 
@@ -48,9 +74,9 @@ class RootCauseAnalysisAgent:
             "affected_service": service_name,
             "related_commits": ["c48a92f"],
             "contributing_factors": [
-                "Surge in peak concurrency requests",
-                "Absence of bounded acquire timeout in connection pool",
-                "Missing circuit breaker for downstream API calls",
+                f"Error category: {category}",
+                f"Affected file: {affected_file}",
+                f"Service: {service_name}",
             ],
             "supporting_evidence_count": len(evidence),
         }

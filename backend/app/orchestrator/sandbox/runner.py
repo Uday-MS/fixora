@@ -107,22 +107,35 @@ class DiagnosticSandboxRunner:
                 with open(test_file_path, "w", encoding="utf-8") as tf:
                     tf.write(test_code)
             else:
-                # Default validation assertion checking file integrity and syntax
-                with open(test_file_path, "w", encoding="utf-8") as tf:
-                    tf.write(f'''
-import unittest
-
-class TestPatchIntegrity(unittest.TestCase):
-    def test_patch_file_integrity(self):
-        with open(r"{target_path}", "r", encoding="utf-8") as f:
-            content = f.read()
-        self.assertGreater(len(content), 0, "Patch file is empty")
-        if r"{target_path}".endswith(".py"):
-            compile(content, r"{target_path}", "exec")
-
-if __name__ == '__main__':
-    unittest.main()
-''')
+                # Real syntax verification using py_compile
+                import py_compile
+                try:
+                    py_compile.compile(target_path, doraise=True)
+                    duration = round(time.perf_counter() - t0, 3)
+                    return {
+                        "applied_cleanly": True,
+                        "syntax_valid": True,
+                        "tests_passed": True,
+                        "total_tests": 1,
+                        "passed_tests": 1,
+                        "failed_tests": 0,
+                        "output": f"AST Verification & Compilation: PASSED for {file_path}",
+                        "duration_seconds": duration,
+                        "security_verdict": "COMPILE_CHECK_PASSED",
+                    }
+                except py_compile.PyCompileError as e:
+                    duration = round(time.perf_counter() - t0, 3)
+                    return {
+                        "applied_cleanly": True,
+                        "syntax_valid": False,
+                        "tests_passed": False,
+                        "total_tests": 1,
+                        "passed_tests": 0,
+                        "failed_tests": 1,
+                        "output": f"Compilation FAILED: {str(e)}",
+                        "duration_seconds": duration,
+                        "security_verdict": "COMPILE_CHECK_FAILED",
+                    }
 
             # Run test using python -m unittest or pytest inside sandbox
             cmd_args = [

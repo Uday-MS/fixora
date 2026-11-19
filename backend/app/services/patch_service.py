@@ -1,6 +1,10 @@
+import os
+import re
+import ast
 import uuid
 import difflib
 import logging
+import httpx
 from typing import List, Optional, Dict, Any
 from datetime import datetime, timezone
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -14,6 +18,7 @@ from app.models.bug import Bug
 from app.services.github_service import GitHubService
 from app.orchestrator.sandbox.runner import sandbox_runner
 from app.orchestrator.github.pr_manager import github_pr_manager
+from app.core.config import settings
 
 logger = logging.getLogger("fixora.patches")
 
@@ -68,22 +73,43 @@ class PatchService:
         if not patch:
             return None
 
-        # Enforce human-in-the-loop approval gate
         if patch.status != "approved":
             raise HTTPException(
                 status_code=400,
                 detail="Human approval required: Patch must be approved by an engineer before creating a Draft GitHub PR."
             )
 
-        # Resolve repository full_name or name
+        r_stmt = select(Repository).where(Repository.id == patch.repository_id)
+        r_obj = (await db.execute(r_stmt)).scalars().first()
         repo_name = "connected-repository"
-        if patch.repository_id:
-            r_stmt = select(Repository).where(Repository.id == patch.repository_id)
-            r_obj = (await db.execute(r_stmt)).scalars().first()
-            if r_obj:
-                repo_name = r_obj.full_name or r_obj.name
+        if r_obj:
+            repo_name = r_obj.full_name or r_obj.name
 
-        # Get test run results for PR description
+        # Try real GitHub PR creation when token is available
+        github_token = getattr(settings, "GITHUB_TOKEN", None) or os.getenv("GITHUB_TOKEN")
+        if github_token and r_obj and r_obj.source == "github" and r_obj.url:
+            try:
+                owner, rname = GitHubService.parse_repo_url(r_obj.url)
+                pr_res = await GitHubService.create_branch_and_draft_pr(
+                    owner=owner,
+                    repo=rname,
+                    file_path=patch.file_path or "repair.py",
+                    new_content=patch.proposed_code or "",
+                    branch_name=f"fixora/repair-{patch.id[:8]}",
+                    pr_title=f"[FIXORA-AUTOPATCH] {patch.title}",
+                    pr_body=f"## FIXORA Autonomous Repair\n\n{patch.explanation or patch.description or ''}\n\n```diff\n{patch.unified_diff or ''}\n```",
+                    token=github_token,
+                )
+                patch.pr_number = pr_res.get("prNumber")
+                patch.pr_url = pr_res.get("prUrl")
+                patch.status = "applied"
+                await db.commit()
+                await db.refresh(patch)
+                return patch
+            except Exception as e:
+                logger.warning("Real GitHub PR creation failed, falling back to simulated: %s", str(e))
+
+        # Fallback to simulated PR manager
         tr_stmt = select(TestRun).where(TestRun.patch_id == patch_id).order_by(TestRun.started_at.desc())
         tr = (await db.execute(tr_stmt)).scalars().first()
         val_result = {
@@ -123,11 +149,37 @@ class PatchService:
         if not patch:
             raise HTTPException(status_code=404, detail="Patch not found")
 
-        # Execute in sandbox runner
+        # Try to find matching test files in the repository
+        test_code = None
+        if patch.repository_id:
+            r_stmt = select(Repository).where(Repository.id == patch.repository_id)
+            repo = (await db.execute(r_stmt)).scalars().first()
+            if repo and repo.source == "github" and repo.url and patch.file_path:
+                try:
+                    owner, rname = GitHubService.parse_repo_url(repo.url)
+                    tree_files = repo.files_tree or []
+                    base_name = os.path.splitext(os.path.basename(patch.file_path))[0]
+                    test_candidates = [
+                        f["path"] for f in tree_files
+                        if isinstance(f, dict) and f.get("type") == "file"
+                        and "test" in f["path"].lower()
+                        and base_name.lower() in f["path"].lower()
+                    ]
+                    if test_candidates:
+                        tc = await GitHubService.fetch_file_content(
+                            owner, rname, test_candidates[0],
+                            branch=repo.branch or "main"
+                        )
+                        if tc and len(tc) > 50:
+                            test_code = tc
+                except Exception as e:
+                    logger.warning("Could not fetch test file for patch: %s", str(e))
+
         val_res = sandbox_runner.execute_validation(
             file_path=patch.file_path or "repair.py",
             original_code=patch.original_code or "",
             proposed_code=patch.proposed_code or "",
+            test_code=test_code,
             test_command="python -m unittest",
         )
 
@@ -162,14 +214,6 @@ class PatchService:
         description: Optional[str] = None,
         target_file: Optional[str] = None
     ) -> Dict[str, Any]:
-        """
-        Executes real research on the selected repository:
-        1. Retrieves repository details.
-        2. Retrieves the actual GitHub issue if issue_number provided.
-        3. Inspects real file tree and matches candidate source files.
-        4. Retrieves actual file contents.
-        5. Formulates root-cause findings and line references.
-        """
         r_stmt = select(Repository).where(Repository.id == repository_id)
         repo = (await db.execute(r_stmt)).scalars().first()
         if not repo:
@@ -178,7 +222,6 @@ class PatchService:
         issue_title = ""
         issue_body = description or ""
 
-        # Fetch issue from GitHub if issue_number is provided
         if issue_number and repo.source == "github" and repo.url:
             try:
                 owner, repo_name = GitHubService.parse_repo_url(repo.url)
@@ -195,24 +238,39 @@ class PatchService:
         elif not issue_title:
             issue_title = (description or "Code defect investigation")[:60]
 
-        # Scan repository files to find relevant candidate files
+        # Extract file paths and URLs mentioned in the issue body
+        mentioned_paths = re.findall(r'[\w/.-]+\.(?:py|ts|tsx|js|go|rs|java|rb)', issue_body)
+
+        # Extract line numbers safely
+        line_num_matches = []
+        raw_matches = re.findall(r'#L(\d+)|lines?\s+(\d+)', issue_body, re.IGNORECASE)
+        for match_tuple in raw_matches:
+            for group in match_tuple:
+                if group:
+                    line_num_matches.append(int(group))
+
         tree_files = repo.files_tree or []
         code_files = [f["path"] for f in tree_files if isinstance(f, dict) and f.get("type") == "file"]
 
         matched_files: List[Dict[str, Any]] = []
 
-        # If user specified target_file and it exists
         if target_file and target_file in code_files:
             matched_files.append({"path": target_file})
         else:
-            # Match keywords from issue title/body against file names
             text_tokens = set((issue_title + " " + issue_body).lower().replace("_", " ").replace("-", " ").replace(".", " ").split())
             scores = []
             for path in code_files:
                 p_lower = path.lower()
-                # Skip test files and non-code
                 if any(p_lower.endswith(ext) for ext in [".py", ".ts", ".tsx", ".js", ".go", ".rs", ".java"]):
                     score = sum(1 for token in text_tokens if len(token) > 2 and token in p_lower)
+                    # Boost files explicitly mentioned in issue
+                    for mp in mentioned_paths:
+                        if mp.lower() in p_lower or p_lower.endswith(mp.lower()):
+                            score += 200
+                    # Boost filename matches
+                    fname = os.path.basename(path).lower()
+                    if any(token in fname for token in text_tokens if len(token) > 3):
+                        score += 100
                     scores.append((score, path))
             scores.sort(key=lambda x: x[0], reverse=True)
 
@@ -220,11 +278,9 @@ class PatchService:
                 matched_files.append({"path": p})
 
             if not matched_files and code_files:
-                # Default to primary code file
                 primary = next((f for f in code_files if any(f.endswith(ext) for ext in [".py", ".ts", ".go", ".rs"])), code_files[0])
                 matched_files.append({"path": primary})
 
-        # Fetch real content for matched files
         owner, repo_name = (None, None)
         if repo.source == "github" and repo.url:
             try:
@@ -239,28 +295,37 @@ class PatchService:
             if owner and repo_name:
                 content = await GitHubService.fetch_file_content(owner, repo_name, path, branch=repo.branch or "main") or ""
 
-            # Extract lines and snippet
             lines = content.splitlines() if content else []
             line_count = len(lines)
-            snippet = "\n".join(lines[:30]) if lines else "# Source code file from repository"
+
+            # Center snippet around mentioned line numbers if available
+            if line_num_matches and lines:
+                center = line_num_matches[0]
+                start = max(0, center - 15)
+                end = min(line_count, center + 15)
+                snippet = "\n".join(lines[start:end])
+                line_start = start + 1
+                line_end = end
+            else:
+                snippet = "\n".join(lines[:30]) if lines else "# Source code file from repository"
+                line_start = 1 if line_count > 0 else 0
+                line_end = min(30, line_count)
 
             detailed_affected.append({
                 "path": path,
                 "language": repo.language or "Python",
-                "lineStart": 1 if line_count > 0 else 0,
-                "lineEnd": min(30, line_count),
+                "lineStart": line_start,
+                "lineEnd": line_end,
                 "snippet": snippet,
                 "totalLines": line_count,
             })
 
-        # Construct diagnosis
         primary_file = detailed_affected[0]["path"] if detailed_affected else "src/main.py"
         root_cause = (
             f"Code inspection of `{primary_file}` indicates an unhandled edge case or boundary defect "
             f"correlated with `{issue_title}`. The logic does not safely handle unexpected inputs or "
             f"missing parameter configurations, leading to runtime degradation or failure."
         )
-
         remediation = (
             f"Introduce defensive parameter guards and validation in `{primary_file}`. "
             f"Ensure fallbacks and explicit error handling are invoked when inputs do not satisfy expected contracts."
@@ -289,19 +354,11 @@ class PatchService:
         description: Optional[str] = None,
         user_guidance: Optional[str] = None
     ) -> Patch:
-        """
-        Synthesizes an actual unified diff based on the real repository code:
-        1. Fetches real source code for the file.
-        2. Applies targeted defensive code transformations.
-        3. Computes a standard unified diff.
-        4. Persists the Patch in the database.
-        """
         r_stmt = select(Repository).where(Repository.id == repository_id)
         repo = (await db.execute(r_stmt)).scalars().first()
         if not repo:
             raise HTTPException(status_code=404, detail="Repository not found")
 
-        # Fetch real file content
         content = None
         if repo.source == "github" and repo.url:
             try:
@@ -311,37 +368,31 @@ class PatchService:
                 logger.warning("Could not fetch file %s from GitHub: %s", file_path, str(e))
 
         if not content:
-            # Fallback to realistic template if file was empty or new
             content = f"# Module: {file_path}\n\ndef process_request(data=None):\n    if data is None:\n        data = {{}}\n    return data\n"
 
         original_lines = content.splitlines(keepends=True)
+        issue_context = f"Issue #{issue_number}: {title or ''}" if issue_number else (description or "Code defect")
+        guidance = user_guidance or "Add defensive checks and error handling"
 
-        # Generate proposed modifications
-        # We inject defensive error handling and parameter fallback
-        if file_path.endswith(".py"):
-            guard_code = [
-                "\n# FIXORA Autonomous Defensive Guard\n",
-                "def _validate_inputs(params):\n",
-                "    if params is None:\n",
-                "        return {}\n",
-                "    return params\n\n"
-            ]
-            proposed_lines = guard_code + original_lines
-        elif file_path.endswith((".ts", ".tsx", ".js")):
-            guard_code = [
-                "\n// FIXORA Autonomous Defensive Guard\n",
-                "function validateInputs<T>(params?: T): T | Record<string, unknown> {\n",
-                "    if (!params) return {};\n",
-                "    return params;\n",
-                "}\n\n"
-            ]
-            proposed_lines = guard_code + original_lines
-        else:
-            proposed_lines = ["// FIXORA Patch\n"] + original_lines
+        # Try LLM-powered fix first
+        proposed_content = await PatchService._generate_llm_fix(
+            file_path=file_path,
+            original_code=content,
+            issue_context=issue_context,
+            guidance=guidance,
+        )
 
-        proposed_content = "".join(proposed_lines)
+        # Fallback to AST surgical repair if LLM fails
+        if not proposed_content or proposed_content.strip() == content.strip():
+            proposed_content = PatchService._ast_surgical_repair(
+                file_path=file_path,
+                original_code=content,
+                issue_context=issue_context,
+                guidance=guidance,
+            )
 
-        # Compute real unified diff
+        proposed_lines = proposed_content.splitlines(keepends=True)
+
         diff_generator = difflib.unified_diff(
             original_lines,
             proposed_lines,
@@ -353,12 +404,11 @@ class PatchService:
 
         patch_title = title or (f"Fix #{issue_number} in {file_path}" if issue_number else f"AutoPatch repair for {file_path}")
         explanation = (
-            f"1. Injected input validation and defensive boundary guard in `{file_path}`.\n"
-            f"2. Prevents runtime exceptions when parameters are None or uninitialized.\n"
-            f"3. User guidance applied: '{user_guidance or 'Standard defensive validation'}'."
+            f"1. Analyzed `{file_path}` for issue: {issue_context}.\n"
+            f"2. Applied targeted code repair based on: '{guidance}'.\n"
+            f"3. Generated via {'LLM' if proposed_content != content else 'AST'} analysis."
         )
 
-        # Ensure an associated Bug record exists
         bug_stmt = select(Bug).where(Bug.repository_id == repo.id, Bug.file_path == file_path)
         bug = (await db.execute(bug_stmt)).scalars().first()
         if not bug:
@@ -403,3 +453,116 @@ class PatchService:
         await db.commit()
         await db.refresh(new_patch)
         return new_patch
+
+    @staticmethod
+    async def _generate_llm_fix(
+        file_path: str,
+        original_code: str,
+        issue_context: str,
+        guidance: str,
+    ) -> Optional[str]:
+        gemini_key = os.getenv("GEMINI_API_KEY")
+        openai_key = os.getenv("OPENAI_API_KEY")
+
+        prompt = (
+            f"You are a senior software engineer. Fix the following code based on the issue and guidance.\n"
+            f"Issue: {issue_context}\n"
+            f"Guidance: {guidance}\n"
+            f"File: {file_path}\n\n"
+            f"Original code:\n```\n{original_code[:3000]}\n```\n\n"
+            f"Return ONLY the complete fixed source code, no explanations, no markdown fences."
+        )
+
+        if gemini_key:
+            try:
+                async with httpx.AsyncClient(timeout=30.0) as client:
+                    res = await client.post(
+                        f"https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key={gemini_key}",
+                        json={"contents": [{"parts": [{"text": prompt}]}]},
+                    )
+                    if res.status_code == 200:
+                        data = res.json()
+                        text = data.get("candidates", [{}])[0].get("content", {}).get("parts", [{}])[0].get("text", "")
+                        if text and len(text) > 20:
+                            text = re.sub(r'^```[a-zA-Z]*\n', '', text)
+                            text = re.sub(r'\n```$', '', text)
+                            return text
+            except Exception as e:
+                logger.warning("Gemini LLM fix failed: %s", str(e))
+
+        if openai_key:
+            try:
+                async with httpx.AsyncClient(timeout=30.0) as client:
+                    res = await client.post(
+                        "https://api.openai.com/v1/chat/completions",
+                        headers={"Authorization": f"Bearer {openai_key}"},
+                        json={
+                            "model": "gpt-4o-mini",
+                            "messages": [{"role": "user", "content": prompt}],
+                            "max_tokens": 4000,
+                        },
+                    )
+                    if res.status_code == 200:
+                        text = res.json()["choices"][0]["message"]["content"]
+                        if text and len(text) > 20:
+                            text = re.sub(r'^```[a-zA-Z]*\n', '', text)
+                            text = re.sub(r'\n```$', '', text)
+                            return text
+            except Exception as e:
+                logger.warning("OpenAI LLM fix failed: %s", str(e))
+
+        return None
+
+    @staticmethod
+    def _ast_surgical_repair(
+        file_path: str,
+        original_code: str,
+        issue_context: str,
+        guidance: str,
+    ) -> str:
+        if not file_path.endswith(".py"):
+            return f"// FIXORA: Applied defensive repair for: {issue_context}\n{original_code}"
+
+        try:
+            tree = ast.parse(original_code)
+        except SyntaxError:
+            return original_code
+
+        lines = original_code.splitlines(keepends=True)
+
+        for node in ast.walk(tree):
+            if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+                func_name = node.name
+                if func_name.startswith("_") and not func_name.startswith("__"):
+                    continue
+
+                insert_line = node.body[0].lineno - 1
+                if isinstance(node.body[0], ast.Expr) and isinstance(node.body[0].value, ast.Constant):
+                    if len(node.body) > 1:
+                        insert_line = node.body[1].lineno - 1
+                    else:
+                        insert_line = node.body[0].end_lineno
+
+                if insert_line < len(lines):
+                    existing = lines[insert_line]
+                    indent = len(existing) - len(existing.lstrip())
+                else:
+                    indent = 8
+                pad = " " * indent
+
+                guard_lines = [
+                    f"{pad}# FIXORA: Defensive guard for {issue_context}\n",
+                ]
+                for arg in node.args.args:
+                    if arg.arg != "self" and arg.arg != "cls":
+                        guard_lines.append(f"{pad}if {arg.arg} is None:\n")
+                        guard_lines.append(f"{pad}    raise ValueError(f\"Parameter '{arg.arg}' must not be None\")\n")
+
+                if len(guard_lines) == 1:
+                    guard_lines.append(f"{pad}# Input validation applied\n")
+
+                new_lines = lines[:insert_line] + guard_lines + lines[insert_line:]
+                return "".join(new_lines)
+
+        guard = f"# FIXORA: Module-level repair for {issue_context}\n"
+        return guard + original_code

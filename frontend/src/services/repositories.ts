@@ -17,6 +17,15 @@ export const repositoryService = {
   getFiles: (id: string) =>
     api.get<ApiResponse<RepositoryFile[]>>(`/repositories/${id}/files`),
 
+  getIssues: (id: string, state?: string) =>
+    api.get<ApiResponse<any[]>>(`/repositories/${id}/issues`, state ? { state } : undefined),
+
+  getBranches: (id: string) =>
+    api.get<ApiResponse<string[]>>(`/repositories/${id}/branches`),
+
+  getFileContent: (id: string, path: string) =>
+    api.get<ApiResponse<{ content: string; path: string }>>(`/repositories/${id}/file-content`, { path }),
+
   delete: (id: string) =>
     api.delete<void>(`/repositories/${id}`),
 

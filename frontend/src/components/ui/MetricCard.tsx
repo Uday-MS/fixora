@@ -9,11 +9,12 @@ interface MetricCardProps {
   change?: ReactNode;
   footer?: ReactNode;
   className?: string;
+  onClick?: () => void;
 }
 
-export function MetricCard({ label, value, icon, change, footer, className }: MetricCardProps) {
+export function MetricCard({ label, value, icon, change, footer, className, onClick }: MetricCardProps) {
   return (
-    <Card className={cn('flex flex-col justify-between p-space-md', className)}>
+    <Card className={cn('flex flex-col justify-between p-space-md', className)} onClick={onClick}>
       <div className="flex items-center justify-between pb-space-xs">
         <span className="font-mono text-mono-tag text-on-surface-variant uppercase tracking-wider">
           {label}

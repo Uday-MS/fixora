@@ -8,7 +8,7 @@ import { OnboardingPage } from '@/pages/auth/OnboardingPage';
 import { DashboardPage } from '@/pages/dashboard/DashboardPage';
 import { RepositoriesPage } from '@/pages/repositories/RepositoriesPage';
 import { RepositoryDetailPage } from '@/pages/repositories/RepositoryDetailPage';
-import { BugsPage } from '@/pages/code-repairs/BugsPage';
+import { IssuesPage } from '@/pages/issues/IssuesPage';
 import { CodeRepairsPage } from '@/pages/code-repairs/CodeRepairsPage';
 import { IncidentsPage } from '@/pages/incidents/IncidentsPage';
 import { InvestigationsPage } from '@/pages/investigations/InvestigationsPage';
@@ -17,12 +17,6 @@ import { AutoPatchPage } from '@/pages/autopatch/AutoPatchPage';
 import { LogsPage } from '@/pages/observability/LogsPage';
 import { MetricsPage } from '@/pages/observability/MetricsPage';
 import { TracesPage } from '@/pages/observability/TracesPage';
-import { KnowledgePage } from '@/pages/knowledge/KnowledgePage';
-import { DocumentsPage } from '@/pages/knowledge/DocumentsPage';
-import { RAGSearchPage } from '@/pages/knowledge/RAGSearchPage';
-import { HealthPage } from '@/pages/analytics/HealthPage';
-import { ReportsPage } from '@/pages/postmortem/ReportsPage';
-import { IntegrationsPage } from '@/pages/settings/IntegrationsPage';
 import { SettingsPage } from '@/pages/settings/SettingsPage';
 
 function ProtectedRoute({ children }: { children: React.ReactNode }) {
@@ -70,10 +64,18 @@ export function App() {
         }
       />
       <Route
+        path="/issues"
+        element={
+          <ProtectedRoute>
+            <IssuesPage />
+          </ProtectedRoute>
+        }
+      />
+      <Route
         path="/bugs"
         element={
           <ProtectedRoute>
-            <BugsPage />
+            <Navigate to="/issues" replace />
           </ProtectedRoute>
         }
       />
@@ -146,54 +148,6 @@ export function App() {
         element={
           <ProtectedRoute>
             <TracesPage />
-          </ProtectedRoute>
-        }
-      />
-      <Route
-        path="/knowledge"
-        element={
-          <ProtectedRoute>
-            <KnowledgePage />
-          </ProtectedRoute>
-        }
-      />
-      <Route
-        path="/documents"
-        element={
-          <ProtectedRoute>
-            <DocumentsPage />
-          </ProtectedRoute>
-        }
-      />
-      <Route
-        path="/rag-search"
-        element={
-          <ProtectedRoute>
-            <RAGSearchPage />
-          </ProtectedRoute>
-        }
-      />
-      <Route
-        path="/analytics/health"
-        element={
-          <ProtectedRoute>
-            <HealthPage />
-          </ProtectedRoute>
-        }
-      />
-      <Route
-        path="/reports"
-        element={
-          <ProtectedRoute>
-            <ReportsPage />
-          </ProtectedRoute>
-        }
-      />
-      <Route
-        path="/integrations"
-        element={
-          <ProtectedRoute>
-            <IntegrationsPage />
           </ProtectedRoute>
         }
       />

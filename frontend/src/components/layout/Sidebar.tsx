@@ -2,21 +2,14 @@ import { NavLink } from 'react-router-dom';
 import {
   LayoutDashboard,
   GitBranch,
-  Bug,
+  CircleDot,
   AlertOctagon,
   Microscope,
   Wrench,
   FileText,
   Activity,
   Layers,
-  BookOpen,
-  FolderGit2,
-  Search,
-  HeartPulse,
-  BarChart3,
-  Sliders,
   Settings,
-  HelpCircle,
   ChevronDown,
   Cpu,
   User,
@@ -49,11 +42,11 @@ const NAV_SECTIONS: NavSection[] = [
     title: 'Engineering',
     items: [
       { name: 'Repositories', path: '/repositories', icon: GitBranch },
-      { name: 'Issues & Bugs', path: '/bugs', icon: Bug },
+      { name: 'Issues', path: '/issues', icon: CircleDot },
       { name: 'Incidents', path: '/incidents', icon: AlertOctagon },
       { name: 'Investigations', path: '/investigations', icon: Microscope },
-      { name: 'Code Repairs', path: '/code-repairs', icon: Wrench },
       { name: 'AutoPatch Studio', path: '/autopatch', icon: Cpu },
+      { name: 'Code Repairs', path: '/code-repairs', icon: Wrench },
     ],
   },
   {
@@ -65,24 +58,8 @@ const NAV_SECTIONS: NavSection[] = [
     ],
   },
   {
-    title: 'Knowledge',
-    items: [
-      { name: 'Knowledge Base', path: '/knowledge', icon: BookOpen },
-      { name: 'Documents', path: '/documents', icon: FolderGit2 },
-      { name: 'RAG Search', path: '/rag-search', icon: Search },
-    ],
-  },
-  {
-    title: 'Analytics',
-    items: [
-      { name: 'Engineering Health', path: '/analytics/health', icon: HeartPulse },
-      { name: 'Postmortems & Reports', path: '/reports', icon: BarChart3 },
-    ],
-  },
-  {
     title: 'Configuration',
     items: [
-      { name: 'Integrations', path: '/integrations', icon: Sliders, badge: 'Git / Otel' },
       { name: 'Settings', path: '/settings', icon: Settings },
     ],
   },
@@ -128,7 +105,7 @@ export function Sidebar() {
           <div className="mt-space-xs flex items-center gap-space-xs">
             <span className="inline-flex items-center gap-1.5 px-2 py-0.5 rounded-full bg-surface-container-highest text-on-surface font-mono text-mono-tag">
               <span className="w-1.5 h-1.5 rounded-full bg-primary-container" />
-              LIVE AGENTS: 6/6
+              CONNECTED REPO
             </span>
           </div>
         </div>
@@ -185,20 +162,7 @@ export function Sidebar() {
 
       {/* Footer / User Profile */}
       <div className="border-t border-surface-container-highest p-space-sm bg-surface-container-lowest shrink-0">
-        <NavLink
-          to="/docs"
-          className="flex items-center justify-between px-space-sm py-2 rounded-lg text-on-surface-variant hover:bg-surface-container-high hover:text-on-surface transition-colors"
-        >
-          <div className="flex items-center gap-space-sm font-body text-label-md">
-            <HelpCircle className="w-4 h-4" />
-            <span>Documentation</span>
-          </div>
-          <span className="font-mono text-mono-tag px-1.5 py-0.5 rounded bg-surface-container text-on-surface-variant">
-            ⌘K
-          </span>
-        </NavLink>
-
-        <div className="mt-space-xs pt-space-xs border-t border-surface-container-highest flex items-center justify-between gap-space-xs px-space-sm py-1.5">
+        <div className="pt-space-xs flex items-center justify-between gap-space-xs px-space-sm py-1.5">
           <div className="flex items-center gap-space-sm min-w-0">
             <div className="w-8 h-8 rounded-full bg-primary flex items-center justify-center text-on-primary shrink-0">
               <User className="w-4 h-4" />

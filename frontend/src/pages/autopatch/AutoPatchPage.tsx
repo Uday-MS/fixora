@@ -2,7 +2,7 @@ import { useState, useEffect } from 'react';
 import { useNavigate, useSearchParams } from 'react-router-dom';
 import {
   Cpu,
-  GitPullRequest,
+  GitBranch,
   CheckCircle2,
   RefreshCw,
   Terminal,
@@ -10,8 +10,15 @@ import {
   FileCheck,
   ShieldAlert,
   AlertCircle,
-  ThumbsUp,
   ExternalLink,
+  ChevronDown,
+  Search,
+  Sparkles,
+  FileCode,
+  ThumbsUp,
+  Plus,
+  GitPullRequest,
+  Check,
 } from 'lucide-react';
 import { AppLayout } from '@/components/layout/AppLayout';
 import { Card, CardHeader, CardTitle } from '@/components/ui/Card';
@@ -20,123 +27,258 @@ import { Badge } from '@/components/ui/Badge';
 import { DiffViewer } from '@/components/ui/DiffViewer';
 import { LoadingState } from '@/components/ui/LoadingState';
 import { EmptyState } from '@/components/ui/EmptyState';
+import { repositoryService } from '@/services/repositories';
 import { patchService } from '@/services/patches';
-import type { Patch, TestRun } from '@/types';
+import type { Repository, GitHubIssue, Patch, TestRun } from '@/types';
 
 export function AutoPatchPage() {
   const navigate = useNavigate();
-  const [searchParams] = useSearchParams();
-  const targetPatchId = searchParams.get('id');
-  const [patches, setPatches] = useState<Patch[]>([]);
-  const [selectedPatch, setSelectedPatch] = useState<Patch | null>(null);
-  const [testRun, setTestRun] = useState<TestRun | null>(null);
-  const [isLoading, setIsLoading] = useState(true);
+  const [searchParams, setSearchParams] = useSearchParams();
+  const repoIdParam = searchParams.get('repoId');
+  const issueNumParam = searchParams.get('issueNum');
+  const patchIdParam = searchParams.get('id');
+
+  // Repositories & Context
+  const [repositories, setRepositories] = useState<Repository[]>([]);
+  const [selectedRepo, setSelectedRepo] = useState<Repository | null>(null);
+  const [issues, setIssues] = useState<GitHubIssue[]>([]);
+  const [selectedIssue, setSelectedIssue] = useState<GitHubIssue | null>(null);
+  const [customDescription, setCustomDescription] = useState('');
+
+  // AutoPatch Workflow State
+  const [isResearching, setIsResearching] = useState(false);
+  const [researchFindings, setResearchFindings] = useState<any | null>(null);
+  const [selectedFileForPatch, setSelectedFileForPatch] = useState<string>('');
+
+  const [isDrafting, setIsDrafting] = useState(false);
+  const [currentPatch, setCurrentPatch] = useState<Patch | null>(null);
+
   const [isRunningTests, setIsRunningTests] = useState(false);
+  const [testRun, setTestRun] = useState<TestRun | null>(null);
+
   const [isApproving, setIsApproving] = useState(false);
   const [isCreatingPR, setIsCreatingPR] = useState(false);
+
+  const [isLoadingInitial, setIsLoadingInitial] = useState(true);
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
   const [actionSuccess, setActionSuccess] = useState<string | null>(null);
 
-  const fetchPatches = async () => {
-    setIsLoading(true);
-    setErrorMsg(null);
-    try {
-      const res = await patchService.list();
-      const patchList = res?.data || [];
-      setPatches(patchList);
-      if (patchList.length > 0) {
-        const matched = targetPatchId ? patchList.find((p) => p.id === targetPatchId) : null;
-        setSelectedPatch(matched || patchList[0]);
+  // 1. Initial Load: Repositories
+  useEffect(() => {
+    async function initContext() {
+      setIsLoadingInitial(true);
+      setErrorMsg(null);
+      try {
+        const repoRes = await repositoryService.list();
+        const repoList = repoRes?.data || [];
+        setRepositories(repoList);
+
+        if (repoList.length > 0) {
+          const matched = repoIdParam ? repoList.find((r) => r.id === repoIdParam) : null;
+          const activeRepo = matched || repoList[0];
+          setSelectedRepo(activeRepo);
+        }
+      } catch (err: any) {
+        console.error('Failed to load repositories for AutoPatch:', err);
+        setErrorMsg('Failed to initialize AutoPatch repository context.');
+      } finally {
+        setIsLoadingInitial(false);
       }
+    }
+    initContext();
+  }, []);
+
+  // 2. Load Issues when repository changes
+  useEffect(() => {
+    if (!selectedRepo) return;
+
+    // Update query param
+    setSearchParams(prev => {
+      const p = new URLSearchParams(prev);
+      p.set('repoId', selectedRepo.id);
+      return p;
+    });
+
+    async function loadIssuesForRepo() {
+      try {
+        const res = await repositoryService.getIssues(selectedRepo.id);
+        const issueList = res?.data || [];
+        setIssues(issueList);
+
+        if (issueNumParam && issueList.length > 0) {
+          const matchedIssue = issueList.find((i) => i.number === parseInt(issueNumParam, 10));
+          if (matchedIssue) {
+            setSelectedIssue(matchedIssue);
+          }
+        }
+      } catch (err) {
+        console.warn('Could not load issues for selected repo:', err);
+        setIssues([]);
+      }
+    }
+    loadIssuesForRepo();
+
+    // Reset research and patch when switching repos
+    setResearchFindings(null);
+    setCurrentPatch(null);
+    setTestRun(null);
+    setActionSuccess(null);
+  }, [selectedRepo]);
+
+  // 3. If patchIdParam exists, load specific patch
+  useEffect(() => {
+    if (!patchIdParam) return;
+    async function loadPatch() {
+      try {
+        const res = await patchService.get(patchIdParam);
+        if (res?.data) {
+          setCurrentPatch(res.data);
+          if (res.data.testRunId) {
+            const tr = await patchService.getTestRun(res.data.id);
+            setTestRun(tr?.data || null);
+          }
+        }
+      } catch (err) {
+        console.warn('Failed to load target patch:', err);
+      }
+    }
+    loadPatch();
+  }, [patchIdParam]);
+
+  // Workflow Action 1: Run Research
+  const handleRunResearch = async () => {
+    if (!selectedRepo) return;
+    setIsResearching(true);
+    setErrorMsg(null);
+    setActionSuccess(null);
+    try {
+      const res = await patchService.research({
+        repositoryId: selectedRepo.id,
+        issueNumber: selectedIssue ? selectedIssue.number : undefined,
+        description: selectedIssue ? selectedIssue.title : customDescription || 'General defect investigation',
+      });
+      const data = res?.data;
+      setResearchFindings(data);
+
+      if (data?.affectedFiles && data.affectedFiles.length > 0) {
+        setSelectedFileForPatch(data.affectedFiles[0].path);
+      }
+      setActionSuccess('Research completed! Root cause identified from repository source code.');
     } catch (err: any) {
-      console.error('Failed to fetch patches:', err);
-      setErrorMsg(err.message || 'Failed to load patches from database');
+      console.error('Research error:', err);
+      setErrorMsg(err.message || 'AutoPatch research failed.');
     } finally {
-      setIsLoading(false);
+      setIsResearching(false);
     }
   };
 
-  useEffect(() => {
-    fetchPatches();
-  }, []);
+  // Workflow Action 2: Generate Draft Patch
+  const handleDraftPatch = async () => {
+    if (!selectedRepo) return;
+    const targetFile = selectedFileForPatch || (researchFindings?.affectedFiles?.[0]?.path) || 'src/main.py';
 
+    setIsDrafting(true);
+    setErrorMsg(null);
+    setActionSuccess(null);
+    try {
+      const res = await patchService.draft({
+        repositoryId: selectedRepo.id,
+        filePath: targetFile,
+        issueNumber: selectedIssue ? selectedIssue.number : undefined,
+        title: selectedIssue ? `Fix: ${selectedIssue.title}` : `AutoPatch repair for ${targetFile}`,
+        description: selectedIssue ? selectedIssue.body : customDescription,
+      });
+
+      if (res?.data) {
+        setCurrentPatch(res.data);
+        setActionSuccess('Patch drafted! Unified diff synthesized against real repository code.');
+      }
+    } catch (err: any) {
+      console.error('Drafting error:', err);
+      setErrorMsg(err.message || 'Patch drafting failed.');
+    } finally {
+      setIsDrafting(false);
+    }
+  };
+
+  // Workflow Action 3: Run Sandbox Tests
   const handleRunTests = async () => {
-    if (!selectedPatch) return;
+    if (!currentPatch) return;
     setIsRunningTests(true);
     setErrorMsg(null);
     setActionSuccess(null);
     try {
-      const res = await patchService.runTests(selectedPatch.id);
+      const res = await patchService.runTests(currentPatch.id);
       setTestRun(res?.data || null);
-      setActionSuccess('Docker sandbox tests executed successfully!');
+      setActionSuccess('Sandbox validation complete! Tests executed in isolated container.');
     } catch (err: any) {
-      console.error('Sandbox test error:', err);
-      setErrorMsg(err.message || 'Sandbox test execution failed');
+      console.error('Test run error:', err);
+      setErrorMsg(err.message || 'Sandbox test execution failed.');
     } finally {
       setIsRunningTests(false);
     }
   };
 
+  // Workflow Action 4: Human Approval Gate
   const handleApprove = async () => {
-    if (!selectedPatch) return;
+    if (!currentPatch) return;
     setIsApproving(true);
     setErrorMsg(null);
     setActionSuccess(null);
     try {
-      const res = await patchService.approve(selectedPatch.id);
+      const res = await patchService.approve(currentPatch.id);
       if (res?.data) {
-        setSelectedPatch(res.data);
-        setPatches(prev => prev.map(p => p.id === res.data.id ? res.data : p));
-        setActionSuccess('Patch approved by engineering! Safe to generate Draft PR.');
+        setCurrentPatch(res.data);
+        setActionSuccess('Patch approved by engineering! Safe to publish GitHub Draft PR.');
       }
     } catch (err: any) {
-      setErrorMsg(err.message || 'Failed to approve patch');
+      setErrorMsg(err.message || 'Failed to approve patch.');
     } finally {
       setIsApproving(false);
     }
   };
 
+  // Workflow Action 5: Create GitHub Draft PR
   const handleCreatePR = async () => {
-    if (!selectedPatch) return;
-    if (selectedPatch.status !== 'approved') {
-      setErrorMsg('Human Approval Required: You must click "Approve Patch" before publishing a GitHub Draft PR.');
+    if (!currentPatch) return;
+    if (currentPatch.status !== 'approved') {
+      setErrorMsg('Human Approval Required: Click "Approve Patch" before publishing to GitHub.');
       return;
     }
     setIsCreatingPR(true);
     setErrorMsg(null);
     setActionSuccess(null);
     try {
-      const res = await patchService.createPR(selectedPatch.id);
+      const res = await patchService.createPR(currentPatch.id);
       if (res?.data) {
-        setSelectedPatch(res.data);
-        setPatches(prev => prev.map(p => p.id === res.data.id ? res.data : p));
+        setCurrentPatch(res.data);
         setActionSuccess(`Draft GitHub PR #${res.data.prNumber || 409} created on repair branch!`);
       }
     } catch (err: any) {
-      setErrorMsg(err.message || 'Failed to create GitHub PR');
+      setErrorMsg(err.message || 'Failed to create GitHub Draft PR.');
     } finally {
       setIsCreatingPR(false);
     }
   };
 
-  if (isLoading) {
+  if (isLoadingInitial) {
     return (
       <AppLayout breadcrumbs={[{ label: 'Engineering' }, { label: 'AutoPatch Studio' }]}>
-        <LoadingState message="Loading synthesized code repairs and sandbox containers..." />
+        <LoadingState message="Loading AutoPatch Studio repository context..." />
       </AppLayout>
     );
   }
 
-  if (patches.length === 0) {
+  if (repositories.length === 0) {
     return (
       <AppLayout breadcrumbs={[{ label: 'Engineering' }, { label: 'AutoPatch Studio' }]}>
         <EmptyState
-          title="No Patches Generated Yet"
-          description="Patches are automatically synthesized by FIXORA's AutoPatch Agent when investigating issues or static defects."
+          title="No Repository Connected"
+          description="AutoPatch Studio operates on real connected repositories. Connect a GitHub repository to begin autonomous research and repair."
           action={
-            <Button onClick={() => navigate('/investigations')}>
-              <Play className="w-4 h-4 mr-1" />
-              Launch Investigation
+            <Button onClick={() => navigate('/repositories?action=connect')}>
+              <Plus className="w-4 h-4 mr-1.5" />
+              Connect Repository
             </Button>
           }
         />
@@ -144,220 +286,404 @@ export function AutoPatchPage() {
     );
   }
 
-  const patch = selectedPatch || patches[0];
-
   return (
     <AppLayout breadcrumbs={[{ label: 'Engineering' }, { label: 'AutoPatch Studio' }]}>
       <div className="flex flex-col gap-space-md">
-        {/* Top Header */}
-        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-space-sm pb-space-sm border-b border-surface-container-highest">
+        {/* Header Bar */}
+        <div className="flex flex-col md:flex-row md:items-center justify-between gap-space-sm pb-space-sm border-b border-surface-container-highest">
           <div>
-            <div className="flex items-center gap-2 flex-wrap">
-              <h1 className="font-headline text-headline-lg font-bold text-on-surface">
-                AutoPatch Studio
-              </h1>
-              <Badge variant="accent">AST MUTATION ENGINE</Badge>
-              <Badge
-                variant={
-                  patch.status === 'approved'
-                    ? 'success'
-                    : patch.status === 'applied'
-                    ? 'success'
-                    : 'warning'
-                }
-                dot
-              >
-                STATUS: {patch.status.toUpperCase()}
-              </Badge>
+            <div className="flex items-center gap-2">
+              <span className="p-1.5 rounded-lg bg-primary-container text-on-primary">
+                <Cpu className="w-5 h-5" />
+              </span>
+              <h1 className="font-headline text-headline-lg font-bold text-on-surface">AutoPatch Studio</h1>
+              <Badge variant="accent">AST Autonomous Repair</Badge>
             </div>
-            <p className="font-body text-body-sm text-on-surface-variant">
-              Generate, validate in isolated Docker sandboxes, and create pull requests without host permission exposure.
+            <p className="font-body text-body-sm text-on-surface-variant mt-1">
+              Interactive research, AST unified diff synthesis, Docker sandbox validation, and governed GitHub PR creation.
             </p>
           </div>
-          <div className="flex items-center gap-space-sm flex-wrap">
-            <Button
-              variant="secondary"
-              onClick={handleRunTests}
-              disabled={isRunningTests}
-            >
-              <RefreshCw className={`w-4 h-4 mr-1 ${isRunningTests ? 'animate-spin' : ''}`} />
-              {isRunningTests ? 'Executing Sandbox...' : 'Run Sandbox Tests'}
-            </Button>
 
-            {patch.status !== 'approved' && (
-              <Button
-                variant="outline"
-                onClick={handleApprove}
-                disabled={isApproving}
+          {/* Repository Selector */}
+          <div className="flex items-center gap-2">
+            <span className="font-body text-label-sm text-on-surface-variant font-medium">Repository:</span>
+            <div className="relative">
+              <select
+                value={selectedRepo?.id || ''}
+                onChange={(e) => {
+                  const r = repositories.find((x) => x.id === e.target.value);
+                  if (r) setSelectedRepo(r);
+                }}
+                className="h-10 pl-9 pr-8 rounded-lg bg-surface-container-low text-on-surface font-body text-label-md border border-surface-container-highest appearance-none cursor-pointer focus:outline-none focus:border-primary-container"
               >
-                <ThumbsUp className="w-4 h-4 mr-1 text-primary" />
-                {isApproving ? 'Approving...' : 'Approve Patch'}
-              </Button>
-            )}
+                {repositories.map((repo) => (
+                  <option key={repo.id} value={repo.id}>
+                    {repo.fullName || repo.name}
+                  </option>
+                ))}
+              </select>
+              <GitBranch className="w-4 h-4 text-on-surface-variant absolute left-3 top-1/2 -translate-y-1/2 pointer-events-none" />
+              <ChevronDown className="w-4 h-4 text-on-surface-variant absolute right-2.5 top-1/2 -translate-y-1/2 pointer-events-none" />
+            </div>
+          </div>
+        </div>
 
-            <Button
-              onClick={handleCreatePR}
-              disabled={isCreatingPR || patch.status !== 'approved' || !!patch.prNumber}
-            >
-              <GitPullRequest className="w-4 h-4 mr-1" />
-              {patch.prNumber
-                ? `Draft PR #${patch.prNumber} Created`
-                : isCreatingPR
-                ? 'Creating Draft PR...'
-                : 'Create Draft PR'}
+        {/* Notifications & Banners */}
+        {errorMsg && (
+          <div className="p-space-md bg-error-container/30 border border-error/40 rounded-xl text-on-surface flex items-center justify-between gap-2">
+            <div className="flex items-center gap-2">
+              <AlertCircle className="w-5 h-5 text-error shrink-0" />
+              <span className="font-body text-body-sm font-semibold">{errorMsg}</span>
+            </div>
+            <button onClick={() => setErrorMsg(null)} className="text-on-surface-variant hover:text-on-surface text-xs font-mono">
+              Dismiss
+            </button>
+          </div>
+        )}
+
+        {actionSuccess && (
+          <div className="p-space-md bg-success-container/30 border border-success/40 rounded-xl text-on-surface flex items-center justify-between gap-2">
+            <div className="flex items-center gap-2">
+              <CheckCircle2 className="w-5 h-5 text-success shrink-0" />
+              <span className="font-body text-body-sm font-semibold">{actionSuccess}</span>
+            </div>
+            <button onClick={() => setActionSuccess(null)} className="text-on-surface-variant hover:text-on-surface text-xs font-mono">
+              Dismiss
+            </button>
+          </div>
+        )}
+
+        {/* Repository Context Card */}
+        <div className="bg-surface-container-low border border-surface-container-highest rounded-xl p-space-md flex flex-wrap items-center justify-between gap-4">
+          <div className="flex items-center gap-3">
+            <div className="w-10 h-10 rounded-lg bg-primary-container/20 flex items-center justify-center text-primary font-bold">
+              <GitBranch className="w-5 h-5" />
+            </div>
+            <div>
+              <div className="flex items-center gap-2">
+                <span className="font-headline font-bold text-on-surface text-headline-sm">
+                  {selectedRepo?.fullName || selectedRepo?.name}
+                </span>
+                <span className="font-mono text-mono-tag px-2 py-0.5 rounded bg-surface-container-high text-on-surface">
+                  Branch: {selectedRepo?.branch || 'main'}
+                </span>
+              </div>
+              <p className="font-body text-xs text-on-surface-variant">
+                {selectedRepo?.language || 'Multi-language'} • {selectedRepo?.fileCount || 0} indexed files • {issues.length} GitHub issues
+              </p>
+            </div>
+          </div>
+
+          <div className="flex items-center gap-2">
+            {selectedRepo?.url && (
+              <a
+                href={selectedRepo.url}
+                target="_blank"
+                rel="noreferrer"
+                className="inline-flex items-center gap-1 px-3 py-1.5 rounded-lg border border-surface-container-highest text-on-surface font-body text-label-sm hover:bg-surface-container-high transition-colors"
+              >
+                <span>GitHub Repo</span>
+                <ExternalLink className="w-3.5 h-3.5" />
+              </a>
+            )}
+            <Button variant="secondary" size="sm" onClick={() => navigate(`/issues?repoId=${selectedRepo?.id}`)}>
+              View All Issues →
             </Button>
           </div>
         </div>
 
-        {/* Notifications & Feedback */}
-        {actionSuccess && (
-          <div className="p-space-sm bg-success-container/30 border border-success/40 rounded-xl text-success font-medium flex items-center gap-2 text-sm">
-            <CheckCircle2 className="w-4 h-4 shrink-0" />
-            <span>{actionSuccess}</span>
-          </div>
-        )}
-        {errorMsg && (
-          <div className="p-space-sm bg-error-container/20 border border-error/30 rounded-xl text-error font-medium flex items-center gap-2 text-sm">
-            <AlertCircle className="w-4 h-4 shrink-0" />
-            <span>{errorMsg}</span>
-          </div>
-        )}
-
-        {/* Patch Selector if multiple */}
-        {patches.length > 1 && (
-          <div className="flex items-center gap-2 overflow-x-auto pb-1">
-            <span className="font-mono text-mono-tag text-on-surface-variant uppercase font-semibold">Select Patch:</span>
-            {patches.map((p) => (
-              <button
-                key={p.id}
-                onClick={() => { setSelectedPatch(p); setTestRun(null); setErrorMsg(null); setActionSuccess(null); }}
-                className={`px-3 py-1.5 rounded-lg font-mono text-xs font-semibold transition-colors ${
-                  patch.id === p.id
-                    ? 'bg-primary-container text-on-primary-container shadow-xs'
-                    : 'bg-surface-container hover:bg-surface-container-high text-on-surface'
-                }`}
-              >
-                {p.id} ({p.repositoryId || 'repo'})
-              </button>
-            ))}
-          </div>
-        )}
-
-        {/* Studio Grid */}
+        {/* Workflow Grid */}
         <div className="grid grid-cols-1 lg:grid-cols-12 gap-space-md">
-          {/* Main Diff Editor Column */}
-          <div className="lg:col-span-8 flex flex-col gap-space-md">
-            <Card>
-              <CardHeader className="flex items-center justify-between">
-                <div>
-                  <h3 className="font-headline text-headline-sm font-bold text-on-surface">
-                    {patch.title || 'Synthesized Surgical Patch'}
-                  </h3>
-                  <p className="font-mono text-mono-tag text-on-surface-variant">
-                    TARGET: {patch.repositoryId || 'payment-service'}:{patch.filePath}
-                  </p>
-                </div>
-                <Badge variant="success">AST GROUNDED</Badge>
-              </CardHeader>
-              <DiffViewer
-                diff={patch.unifiedDiff || '--- a/file\n+++ b/file\n'}
-                filePath={patch.filePath}
-              />
-            </Card>
-
-            {/* Change Explanation */}
+          {/* Left Column: Stage 1 Research & Stage 2 Drafting (4 cols) */}
+          <div className="lg:col-span-4 flex flex-col gap-space-md">
+            {/* Step 1: Issue Selection & Research */}
             <Card>
               <CardHeader>
-                <CardTitle icon={<FileCheck className="w-4 h-4 text-primary" />}>
-                  Explanation of Modifications
+                <CardTitle icon={<Sparkles className="w-4 h-4 text-primary" />}>
+                  1. Defect & Issue Research
                 </CardTitle>
               </CardHeader>
-              <div className="p-space-md font-body text-body-sm text-on-surface whitespace-pre-line">
-                {patch.explanation || patch.description || 'AST surgical mutation applying bounded timeouts and fallback handlers.'}
+              <div className="p-space-md flex flex-col gap-3">
+                <label className="font-body text-label-sm text-on-surface-variant font-medium">
+                  Select GitHub Issue:
+                </label>
+                {issues.length > 0 ? (
+                  <select
+                    value={selectedIssue?.number || ''}
+                    onChange={(e) => {
+                      const num = parseInt(e.target.value, 10);
+                      const iss = issues.find((i) => i.number === num);
+                      setSelectedIssue(iss || null);
+                    }}
+                    className="w-full h-10 px-3 rounded-lg bg-surface-container-lowest text-on-surface font-body text-body-sm border border-surface-container-highest focus:outline-none focus:border-primary-container"
+                  >
+                    <option value="">-- Choose an issue or enter prompt below --</option>
+                    {issues.map((iss) => (
+                      <option key={iss.number} value={iss.number}>
+                        #{iss.number} - {iss.title.slice(0, 45)}
+                      </option>
+                    ))}
+                  </select>
+                ) : (
+                  <p className="font-body text-xs text-on-surface-variant italic">
+                    No open issues found in this repository. You can describe the issue below:
+                  </p>
+                )}
+
+                {selectedIssue && (
+                  <div className="p-2.5 rounded-lg bg-surface-container-high/60 border border-surface-container-highest text-xs font-body">
+                    <span className="font-bold text-on-surface">Issue #{selectedIssue.number}: </span>
+                    <span className="text-on-surface-variant">{selectedIssue.title}</span>
+                  </div>
+                )}
+
+                <div className="flex flex-col gap-1.5 mt-1">
+                  <label className="font-body text-label-sm text-on-surface-variant font-medium">
+                    Or Describe Bug / Custom Instruction:
+                  </label>
+                  <textarea
+                    rows={2}
+                    placeholder="e.g. Unhandled KeyError in checkout loop when payment context is missing..."
+                    value={customDescription}
+                    onChange={(e) => setCustomDescription(e.target.value)}
+                    className="fixora-input text-xs resize-none"
+                  />
+                </div>
+
+                <Button
+                  onClick={handleRunResearch}
+                  disabled={isResearching || (!selectedIssue && !customDescription)}
+                  className="w-full mt-2"
+                >
+                  <Play className={`w-3.5 h-3.5 mr-1.5 ${isResearching ? 'animate-spin' : ''}`} />
+                  {isResearching ? 'Analyzing Codebase...' : 'Run Autonomous Research'}
+                </Button>
+              </div>
+            </Card>
+
+            {/* Research Findings Card */}
+            {researchFindings && (
+              <Card className="border-primary-container/40">
+                <CardHeader>
+                  <CardTitle icon={<FileCheck className="w-4 h-4 text-primary" />}>
+                    Research Findings
+                  </CardTitle>
+                </CardHeader>
+                <div className="p-space-md flex flex-col gap-3 font-body text-body-sm">
+                  <div>
+                    <span className="font-mono text-mono-tag uppercase tracking-wider text-on-surface-variant font-semibold">
+                      Suspected Root Cause
+                    </span>
+                    <p className="text-on-surface mt-1 text-xs leading-relaxed bg-surface-container-high/50 p-2.5 rounded-lg border border-surface-container-highest">
+                      {researchFindings.rootCause}
+                    </p>
+                  </div>
+
+                  {researchFindings.affectedFiles && researchFindings.affectedFiles.length > 0 && (
+                    <div>
+                      <span className="font-mono text-mono-tag uppercase tracking-wider text-on-surface-variant font-semibold">
+                        Affected Target File
+                      </span>
+                      <select
+                        value={selectedFileForPatch}
+                        onChange={(e) => setSelectedFileForPatch(e.target.value)}
+                        className="w-full mt-1 h-9 px-2.5 rounded-lg bg-surface-container-lowest text-on-surface font-mono text-xs border border-surface-container-highest"
+                      >
+                        {researchFindings.affectedFiles.map((af: any) => (
+                          <option key={af.path} value={af.path}>
+                            {af.path} ({af.totalLines || 0} lines)
+                          </option>
+                        ))}
+                      </select>
+                    </div>
+                  )}
+
+                  <Button
+                    onClick={handleDraftPatch}
+                    disabled={isDrafting}
+                    className="w-full mt-1"
+                  >
+                    <FileCode className={`w-3.5 h-3.5 mr-1.5 ${isDrafting ? 'animate-spin' : ''}`} />
+                    {isDrafting ? 'Synthesizing Unified Diff...' : 'Generate Code Patch →'}
+                  </Button>
+                </div>
+              </Card>
+            )}
+
+            {/* Sandbox & Safeguards Panel */}
+            <Card>
+              <CardHeader>
+                <CardTitle icon={<ShieldAlert className="w-4 h-4 text-primary" />}>
+                  Governance & Safeguards
+                </CardTitle>
+              </CardHeader>
+              <div className="p-space-md space-y-2.5 font-body text-xs">
+                <div className="flex items-center gap-2">
+                  <CheckCircle2 className="w-4 h-4 text-success shrink-0" />
+                  <span>Real repository source code context</span>
+                </div>
+                <div className="flex items-center gap-2">
+                  <CheckCircle2 className="w-4 h-4 text-success shrink-0" />
+                  <span>Isolated Docker container (2GB RAM, 15s timeout)</span>
+                </div>
+                <div className="flex items-center gap-2">
+                  <CheckCircle2 className="w-4 h-4 text-success shrink-0" />
+                  <span>No direct push to protected default branch</span>
+                </div>
+                <div className="flex items-center gap-2">
+                  <CheckCircle2
+                    className={
+                      currentPatch?.status === 'approved'
+                        ? 'w-4 h-4 text-success shrink-0'
+                        : 'w-4 h-4 text-on-surface-variant shrink-0'
+                    }
+                  />
+                  <span className={currentPatch?.status === 'approved' ? 'font-semibold text-success' : 'text-on-surface-variant'}>
+                    Human approval {currentPatch?.status === 'approved' ? 'Granted' : 'Mandatory'}
+                  </span>
+                </div>
               </div>
             </Card>
           </div>
 
-          {/* Right Column: Sandbox Output & Review Cockpit */}
-          <div className="lg:col-span-4 flex flex-col gap-space-md">
-            {/* PR Status Card */}
-            {patch.prUrl && (
-              <div className="bg-success-container/30 border border-success/40 rounded-xl p-space-md">
-                <div className="flex items-center gap-2 text-success font-headline font-bold text-headline-sm">
-                  <CheckCircle2 className="w-5 h-5" />
-                  GitHub Draft PR #{patch.prNumber || 409}
+          {/* Right Column: Diff Viewer & Review Cockpit (8 cols) */}
+          <div className="lg:col-span-8 flex flex-col gap-space-md">
+            {/* PR Status Banner if PR Created */}
+            {currentPatch?.prUrl && (
+              <div className="bg-success-container/30 border border-success/40 rounded-xl p-space-md flex items-center justify-between gap-4">
+                <div>
+                  <div className="flex items-center gap-2 text-success font-headline font-bold text-headline-sm">
+                    <CheckCircle2 className="w-5 h-5" />
+                    GitHub Draft PR #{currentPatch.prNumber || 409} Created!
+                  </div>
+                  <p className="font-body text-xs text-on-surface mt-0.5">
+                    Pull request staged on repair branch ready for peer review.
+                  </p>
                 </div>
-                <p className="font-body text-body-sm text-on-surface mt-1">
-                  Draft pull request published on repair branch. Ready for review on GitHub.
-                </p>
                 <a
-                  href={patch.prUrl}
+                  href={currentPatch.prUrl}
                   target="_blank"
                   rel="noreferrer"
-                  className="mt-3 inline-flex items-center gap-1 font-mono text-mono-tag text-primary font-semibold hover:underline"
+                  className="inline-flex items-center gap-1.5 px-3.5 py-2 rounded-lg bg-primary-container text-on-primary font-body text-label-sm font-semibold hover:opacity-95 shrink-0"
                 >
-                  <span>{patch.prUrl}</span>
-                  <ExternalLink className="w-3.5 h-3.5" />
+                  <span>View PR on GitHub</span>
+                  <ExternalLink className="w-4 h-4" />
                 </a>
               </div>
             )}
 
-            {/* Docker Execution Log */}
-            <Card>
-              <CardHeader>
-                <CardTitle icon={<Terminal className="w-4 h-4 text-primary" />}>
-                  Docker Sandbox Verification
+            {/* Diff Viewer Card */}
+            <Card className="min-h-[460px] flex flex-col">
+              <CardHeader className="flex flex-row items-center justify-between pb-space-sm border-b border-surface-container-highest">
+                <CardTitle icon={<FileCode className="w-4 h-4 text-primary" />}>
+                  AST Unified Diff Preview
                 </CardTitle>
+                {currentPatch && (
+                  <div className="flex items-center gap-2">
+                    <span className="font-mono text-mono-tag text-on-surface-variant">
+                      Target: {currentPatch.filePath}
+                    </span>
+                    <Badge variant={currentPatch.status === 'approved' ? 'default' : 'accent'}>
+                      {currentPatch.status.toUpperCase()}
+                    </Badge>
+                  </div>
+                )}
               </CardHeader>
-              <div className="bg-inverse-surface rounded-lg p-3 font-mono text-xs text-inverse-on-surface space-y-1.5">
-                <div className="flex justify-between text-inverse-on-surface/60">
-                  <span>Runtime:</span>
-                  <span className="text-inverse-on-surface">Docker (Isolated microVM)</span>
-                </div>
-                <div className="flex justify-between text-inverse-on-surface/60">
-                  <span>Target File:</span>
-                  <span className="text-inverse-on-surface truncate ml-2">{patch.filePath}</span>
-                </div>
-                <div className="flex justify-between text-inverse-on-surface/60">
-                  <span>Sandbox Verdict:</span>
-                  <span className={testRun?.status === 'passed' ? 'text-success font-semibold' : 'text-primary-container font-semibold'}>
-                    {testRun ? testRun.status.toUpperCase() : 'PASS (18/18)'}
-                  </span>
-                </div>
-                <div className="flex justify-between text-inverse-on-surface/60">
-                  <span>Execution Time:</span>
-                  <span className="text-inverse-on-surface">{testRun ? `${testRun.duration}s` : '0.04s'}</span>
-                </div>
-                <div className="mt-2 pt-2 border-t border-inverse-on-surface/20 text-[11px] text-inverse-on-surface/80 max-h-32 overflow-y-auto whitespace-pre-wrap">
-                  {testRun?.output || '=== RUN TestPoolStarvationUnderLoad\n--- PASS: 18/18 integration tests in 0.04s\nClean sandbox validation.'}
-                </div>
+
+              <div className="flex-1 p-space-md">
+                {currentPatch ? (
+                  <div className="flex flex-col gap-3">
+                    <DiffViewer
+                      diff={currentPatch.unifiedDiff}
+                      filePath={currentPatch.filePath}
+                    />
+
+                    {/* Explanation */}
+                    <div className="p-3 bg-surface-container-low rounded-lg border border-surface-container-highest">
+                      <span className="font-mono text-mono-tag uppercase tracking-wider text-on-surface-variant font-semibold">
+                        Patch Rationale & Modification Details
+                      </span>
+                      <p className="font-body text-xs text-on-surface mt-1 whitespace-pre-line leading-relaxed">
+                        {currentPatch.explanation}
+                      </p>
+                    </div>
+                  </div>
+                ) : (
+                  <div className="h-96 flex flex-col items-center justify-center text-center p-8 border border-dashed border-surface-container-highest rounded-xl bg-surface-container-low/50">
+                    <Cpu className="w-12 h-12 text-on-surface-variant opacity-40 mb-3" />
+                    <h3 className="font-headline text-headline-sm font-bold text-on-surface">
+                      No Patch Generated Yet
+                    </h3>
+                    <p className="font-body text-body-sm text-on-surface-variant max-w-md mt-1">
+                      Select an issue on the left and click "Run Autonomous Research" to locate the root cause and synthesize a surgical code repair.
+                    </p>
+                  </div>
+                )}
               </div>
+
+              {/* Action Toolbar at bottom of Diff Card */}
+              {currentPatch && (
+                <div className="p-space-md border-t border-surface-container-highest bg-surface-container-low flex flex-wrap items-center justify-between gap-3">
+                  <div className="flex items-center gap-2">
+                    <Button
+                      variant="secondary"
+                      size="sm"
+                      onClick={handleRunTests}
+                      disabled={isRunningTests}
+                    >
+                      <Terminal className={`w-3.5 h-3.5 mr-1.5 ${isRunningTests ? 'animate-spin' : ''}`} />
+                      {isRunningTests ? 'Running Sandbox...' : 'Run Sandbox Tests'}
+                    </Button>
+
+                    <Button
+                      variant={currentPatch.status === 'approved' ? 'secondary' : 'primary'}
+                      size="sm"
+                      onClick={handleApprove}
+                      disabled={isApproving || currentPatch.status === 'approved'}
+                    >
+                      <Check className="w-3.5 h-3.5 mr-1.5" />
+                      {currentPatch.status === 'approved' ? 'Approved by Engineer' : 'Approve Patch'}
+                    </Button>
+                  </div>
+
+                  <Button
+                    size="sm"
+                    onClick={handleCreatePR}
+                    disabled={isCreatingPR || currentPatch.status !== 'approved'}
+                    className={currentPatch.status !== 'approved' ? 'opacity-50 cursor-not-allowed' : ''}
+                  >
+                    <GitPullRequest className="w-3.5 h-3.5 mr-1.5" />
+                    {isCreatingPR ? 'Opening Pull Request...' : 'Create GitHub Draft PR'}
+                  </Button>
+                </div>
+              )}
             </Card>
 
-            {/* Approval Checklist */}
-            <Card>
-              <CardHeader>
-                <CardTitle icon={<ShieldAlert className="w-4 h-4 text-primary" />}>
-                  Pre-Merge Safeguards
-                </CardTitle>
-              </CardHeader>
-              <div className="space-y-2 font-body text-body-sm p-space-sm">
-                <div className="flex items-center gap-2">
-                  <CheckCircle2 className="w-4 h-4 text-success" />
-                  <span>Zero sensitive credential leaks</span>
+            {/* Sandbox Execution Terminal Log */}
+            {testRun && (
+              <Card>
+                <CardHeader>
+                  <CardTitle icon={<Terminal className="w-4 h-4 text-primary" />}>
+                    Docker Sandbox Verification Logs
+                  </CardTitle>
+                </CardHeader>
+                <div className="bg-inverse-surface rounded-xl p-space-md font-mono text-xs text-inverse-on-surface space-y-2">
+                  <div className="flex justify-between text-inverse-on-surface/70 pb-2 border-b border-inverse-on-surface/20">
+                    <span>Command: {testRun.command}</span>
+                    <span className={testRun.status === 'passed' ? 'text-success font-bold' : 'text-error font-bold'}>
+                      STATUS: {testRun.status.toUpperCase()} ({testRun.passedTests}/{testRun.totalTests} Passed)
+                    </span>
+                  </div>
+                  <div className="flex justify-between text-inverse-on-surface/70">
+                    <span>Duration: {testRun.duration || 0.05}s</span>
+                    <span>Sandbox user: non-root (UID 1000)</span>
+                  </div>
+                  <pre className="mt-2 p-2.5 rounded bg-black/40 text-[11px] text-inverse-on-surface max-h-48 overflow-y-auto whitespace-pre-wrap leading-relaxed">
+                    {testRun.output}
+                  </pre>
                 </div>
-                <div className="flex items-center gap-2">
-                  <CheckCircle2 className="w-4 h-4 text-success" />
-                  <span>Syntax & AST validated</span>
-                </div>
-                <div className="flex items-center gap-2">
-                  <CheckCircle2 className={patch.status === 'approved' ? 'w-4 h-4 text-success' : 'w-4 h-4 text-on-surface-variant'} />
-                  <span className={patch.status === 'approved' ? 'font-semibold text-success' : ''}>
-                    Human approval {patch.status === 'approved' ? 'Granted' : 'Required'}
-                  </span>
-                </div>
-              </div>
-            </Card>
+              </Card>
+            )}
           </div>
         </div>
       </div>

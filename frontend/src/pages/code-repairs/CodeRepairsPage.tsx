@@ -1,16 +1,14 @@
 import { useState, useEffect } from 'react';
-import { useNavigate } from 'react-router-dom';
+import { useNavigate, useSearchParams } from 'react-router-dom';
 import {
   Wrench,
   Search,
-  Filter,
   RefreshCw,
   GitPullRequest,
-  CheckCircle2,
-  Clock,
-  ArrowRight,
-  ExternalLink,
-  ShieldCheck,
+  GitBranch,
+  ChevronDown,
+  Cpu,
+  Plus,
 } from 'lucide-react';
 import { AppLayout } from '@/components/layout/AppLayout';
 import { Card } from '@/components/ui/Card';
@@ -19,33 +17,64 @@ import { Badge } from '@/components/ui/Badge';
 import { LoadingState } from '@/components/ui/LoadingState';
 import { EmptyState } from '@/components/ui/EmptyState';
 import { patchService } from '@/services/patches';
-import type { Patch } from '@/types';
+import { repositoryService } from '@/services/repositories';
+import type { Patch, Repository } from '@/types';
 
 export function CodeRepairsPage() {
   const navigate = useNavigate();
+  const [searchParams, setSearchParams] = useSearchParams();
+  const repoIdParam = searchParams.get('repoId');
+
+  const [repositories, setRepositories] = useState<Repository[]>([]);
+  const [selectedRepo, setSelectedRepo] = useState<Repository | null>(null);
   const [patches, setPatches] = useState<Patch[]>([]);
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [searchTerm, setSearchTerm] = useState('');
   const [statusFilter, setStatusFilter] = useState('all');
 
-  const fetchRepairs = async () => {
+  // Load repositories
+  useEffect(() => {
+    async function loadRepos() {
+      try {
+        const res = await repositoryService.list();
+        const repoList = res?.data || [];
+        setRepositories(repoList);
+        if (repoList.length > 0) {
+          const matched = repoIdParam ? repoList.find((r) => r.id === repoIdParam) : null;
+          setSelectedRepo(matched || repoList[0]);
+        }
+      } catch (err) {
+        console.error('Failed to load repositories for Code Repairs:', err);
+      }
+    }
+    loadRepos();
+  }, []);
+
+  const fetchRepairs = async (repoId?: string) => {
     setIsLoading(true);
     setError(null);
     try {
-      const res = await patchService.list();
+      const targetId = repoId || selectedRepo?.id;
+      const res = await patchService.list(targetId ? { repositoryId: targetId } : undefined);
       setPatches(res?.data || []);
     } catch (err: any) {
       console.error('Failed to fetch repairs history:', err);
       setError(err.message || 'Failed to load code repairs from database');
+      setPatches([]);
     } finally {
       setIsLoading(false);
     }
   };
 
   useEffect(() => {
-    fetchRepairs();
-  }, []);
+    if (selectedRepo) {
+      setSearchParams({ repoId: selectedRepo.id });
+      fetchRepairs(selectedRepo.id);
+    } else {
+      setIsLoading(false);
+    }
+  }, [selectedRepo]);
 
   const filteredPatches = patches.filter((p) => {
     const matchesSearch =
@@ -54,30 +83,54 @@ export function CodeRepairsPage() {
       (p.repositoryId || '').toLowerCase().includes(searchTerm.toLowerCase());
     const matchesStatus =
       statusFilter === 'all' ||
-      (statusFilter === 'draft' && p.status === 'draft') ||
+      (statusFilter === 'pending_review' && (p.status === 'pending_review' || p.status === 'draft')) ||
       (statusFilter === 'approved' && p.status === 'approved') ||
       (statusFilter === 'pr_created' && Boolean(p.prNumber));
     return matchesSearch && matchesStatus;
   });
 
   return (
-    <AppLayout breadcrumbs={[{ label: 'Engineering' }, { label: 'Code Repairs History' }]}>
+    <AppLayout breadcrumbs={[{ label: 'Engineering' }, { label: 'Code Repairs' }]}>
       <div className="flex flex-col gap-space-md">
         {/* Header */}
         <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-space-sm pb-space-sm border-b border-surface-container-highest">
           <div>
             <h1 className="font-headline text-headline-lg font-bold text-on-surface">Code Repairs History</h1>
             <p className="font-body text-body-sm text-on-surface-variant">
-              Audit log of synthesized AST mutations, sandbox verification outcomes, and reviewer sign-offs.
+              Audit log of synthesized AST code repairs, sandbox verification outcomes, and GitHub PR staging.
             </p>
           </div>
-          <div className="flex items-center gap-2">
-            <Button variant="secondary" size="md" onClick={fetchRepairs} disabled={isLoading}>
+
+          <div className="flex items-center gap-2 flex-wrap">
+            {/* Repository Selector */}
+            {repositories.length > 0 && (
+              <div className="relative">
+                <select
+                  value={selectedRepo?.id || ''}
+                  onChange={(e) => {
+                    const r = repositories.find((x) => x.id === e.target.value);
+                    if (r) setSelectedRepo(r);
+                  }}
+                  className="h-10 pl-9 pr-8 rounded-lg bg-surface-container-low text-on-surface font-body text-label-md border border-surface-container-highest appearance-none cursor-pointer focus:outline-none focus:border-primary-container"
+                >
+                  {repositories.map((repo) => (
+                    <option key={repo.id} value={repo.id}>
+                      {repo.fullName || repo.name}
+                    </option>
+                  ))}
+                </select>
+                <GitBranch className="w-4 h-4 text-on-surface-variant absolute left-3 top-1/2 -translate-y-1/2 pointer-events-none" />
+                <ChevronDown className="w-4 h-4 text-on-surface-variant absolute right-2.5 top-1/2 -translate-y-1/2 pointer-events-none" />
+              </div>
+            )}
+
+            <Button variant="secondary" size="md" onClick={() => fetchRepairs()} disabled={isLoading}>
               <RefreshCw className={`w-4 h-4 mr-1 text-on-surface-variant ${isLoading ? 'animate-spin' : ''}`} />
               Refresh
             </Button>
-            <Button onClick={() => navigate('/autopatch')}>
-              <Wrench className="w-4 h-4 mr-1" />
+
+            <Button onClick={() => navigate(`/autopatch?repoId=${selectedRepo?.id || ''}`)}>
+              <Cpu className="w-4 h-4 mr-1.5 text-primary-container" />
               AutoPatch Studio
             </Button>
           </div>
@@ -89,7 +142,7 @@ export function CodeRepairsPage() {
             <Search className="absolute left-3 top-1/2 -translate-y-1/2 text-on-surface-variant w-4 h-4" />
             <input
               type="text"
-              placeholder="Search repairs by title, repo, or file..."
+              placeholder="Search repairs by title, file, or id..."
               value={searchTerm}
               onChange={(e) => setSearchTerm(e.target.value)}
               className="fixora-input pl-9 w-full text-sm"
@@ -98,7 +151,7 @@ export function CodeRepairsPage() {
 
           <div className="flex items-center gap-2 self-start sm:self-auto">
             <span className="text-xs text-on-surface-variant font-mono uppercase">Filter:</span>
-            {['all', 'draft', 'approved', 'pr_created'].map((st) => (
+            {['all', 'pending_review', 'approved', 'pr_created'].map((st) => (
               <button
                 key={st}
                 onClick={() => setStatusFilter(st)}
@@ -120,17 +173,22 @@ export function CodeRepairsPage() {
         ) : error ? (
           <div className="p-space-lg bg-error-container/20 border border-error/30 rounded-xl text-center">
             <p className="font-bold text-on-surface">{error}</p>
-            <Button variant="secondary" size="sm" className="mt-4" onClick={fetchRepairs}>
+            <Button variant="secondary" size="sm" className="mt-4" onClick={() => fetchRepairs()}>
               Retry
             </Button>
           </div>
         ) : filteredPatches.length === 0 ? (
           <EmptyState
             title="No Code Repairs Found"
-            description="Autonomous patches are generated when investigations identify root-cause fixes."
+            description={
+              selectedRepo
+                ? `No code repairs have been generated for '${selectedRepo.fullName || selectedRepo.name}' yet.`
+                : 'Connect a repository and use AutoPatch Studio to research defects and synthesize patches.'
+            }
             action={
-              <Button onClick={() => navigate('/investigations')}>
-                Launch Investigation
+              <Button onClick={() => navigate(`/autopatch?repoId=${selectedRepo?.id || ''}`)}>
+                <Cpu className="w-4 h-4 mr-1.5" />
+                Open AutoPatch Studio
               </Button>
             }
           />
@@ -140,7 +198,7 @@ export function CodeRepairsPage() {
               <Card
                 key={patch.id}
                 className="p-space-md hover:border-primary-container transition-all cursor-pointer"
-                onClick={() => navigate(`/autopatch?id=${patch.id}`)}
+                onClick={() => navigate(`/autopatch?id=${patch.id}&repoId=${selectedRepo?.id || ''}`)}
               >
                 <div className="flex flex-col md:flex-row md:items-center justify-between gap-space-sm">
                   <div className="space-y-1">
@@ -185,7 +243,7 @@ export function CodeRepairsPage() {
                       variant="secondary"
                       onClick={(e) => {
                         e.stopPropagation();
-                        navigate(`/autopatch?id=${patch.id}`);
+                        navigate(`/autopatch?id=${patch.id}&repoId=${selectedRepo?.id || ''}`);
                       }}
                     >
                       Open in Studio →

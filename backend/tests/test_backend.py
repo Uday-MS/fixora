@@ -191,3 +191,47 @@ async def test_settings_endpoint():
         assert res.status_code == 200
         data = res.json()["data"]
         assert data["dockerMemoryLimit"] == "2048 MB"
+
+@pytest.mark.asyncio
+async def test_autopatch_studio_endpoints():
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as ac:
+        # 1. Fetch repositories
+        r_res = await ac.get("/api/repositories")
+        assert r_res.status_code == 200
+        repos = r_res.json()["data"]
+        assert len(repos) > 0
+        repo_id = repos[0]["id"]
+
+        # 2. Test Issues endpoint
+        issues_res = await ac.get(f"/api/repositories/{repo_id}/issues?state=all")
+        assert issues_res.status_code == 200
+        assert "data" in issues_res.json()
+
+        # 3. Test Patch Research
+        res_res = await ac.post("/api/patches/research", json={
+            "repositoryId": repo_id,
+            "issueNumber": 1,
+            "description": "Fix IndexError when list is empty"
+        })
+        assert res_res.status_code == 200
+        res_data = res_res.json()["data"]
+        assert res_data["issueNumber"] == 1
+        assert "rootCause" in res_data
+        assert "affectedFiles" in res_data
+
+        target_file = res_data["affectedFiles"][0]["path"] if res_data["affectedFiles"] else "src/utils.py"
+
+        # 4. Test Patch Draft
+        draft_res = await ac.post("/api/patches/draft", json={
+            "repositoryId": repo_id,
+            "issueNumber": 1,
+            "title": "Fix IndexError when list is empty",
+            "filePath": target_file,
+            "userGuidance": "Add defensive check before accessing index 0"
+        })
+        assert draft_res.status_code == 200
+        draft_data = draft_res.json()["data"]
+        assert "unifiedDiff" in draft_data
+        assert "id" in draft_data
+        assert draft_data["status"] == "draft"
+

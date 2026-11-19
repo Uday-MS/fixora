@@ -1,5 +1,5 @@
 from typing import Optional
-from fastapi import APIRouter, Depends, HTTPException, Body
+from fastapi import APIRouter, Depends, HTTPException, Body, Query
 from sqlalchemy.ext.asyncio import AsyncSession
 from app.db.session import get_db
 from app.schemas.patch import PatchResponse, TestRunResponse
@@ -9,8 +9,12 @@ from app.services.patch_service import PatchService
 router = APIRouter()
 
 @router.get("", response_model=PaginatedResponse[PatchResponse])
-async def list_patches(db: AsyncSession = Depends(get_db)):
-    patches = await PatchService.list_patches(db)
+async def list_patches(
+    project_id: Optional[str] = Query(None, alias="projectId"),
+    repository_id: Optional[str] = Query(None, alias="repositoryId"),
+    db: AsyncSession = Depends(get_db)
+):
+    patches = await PatchService.list_patches(db, project_id=project_id, repository_id=repository_id)
     items = [PatchResponse.model_validate(p) for p in patches]
     return PaginatedResponse(
         data=items,
@@ -19,6 +23,53 @@ async def list_patches(db: AsyncSession = Depends(get_db)):
         page_size=50,
         total_pages=1,
     )
+
+@router.post("/research", response_model=ApiResponse[dict])
+async def research_issue(
+    payload: dict = Body(...),
+    db: AsyncSession = Depends(get_db)
+):
+    """
+    Executes AutoPatch Research workflow on the selected repository:
+    Analyzes issue, searches repository code files, locates root cause and affected lines.
+    """
+    repository_id = payload.get("repositoryId")
+    if not repository_id:
+        raise HTTPException(status_code=400, detail="repositoryId is required")
+
+    findings = await PatchService.research_issue(
+        db=db,
+        repository_id=repository_id,
+        issue_number=payload.get("issueNumber"),
+        description=payload.get("description"),
+        target_file=payload.get("targetFile"),
+    )
+    return ApiResponse(data=findings, message="Research completed successfully.")
+
+@router.post("/draft", response_model=ApiResponse[PatchResponse])
+async def draft_patch(
+    payload: dict = Body(...),
+    db: AsyncSession = Depends(get_db)
+):
+    """
+    Executes AutoPatch Drafting workflow:
+    Generates actual unified diff and proposed code based on the real repository source.
+    """
+    repository_id = payload.get("repositoryId")
+    file_path = payload.get("filePath")
+    if not repository_id or not file_path:
+        raise HTTPException(status_code=400, detail="repositoryId and filePath are required")
+
+    patch = await PatchService.draft_patch(
+        db=db,
+        repository_id=repository_id,
+        file_path=file_path,
+        issue_number=payload.get("issueNumber"),
+        title=payload.get("title"),
+        description=payload.get("description"),
+        user_guidance=payload.get("userGuidance"),
+    )
+    return ApiResponse(data=PatchResponse.model_validate(patch), message="Patch drafted successfully.")
 
 @router.get("/{id}", response_model=ApiResponse[PatchResponse])
 async def get_patch(id: str, db: AsyncSession = Depends(get_db)):
@@ -58,6 +109,5 @@ async def run_tests(patch_id: str, db: AsyncSession = Depends(get_db)):
 async def get_test_run(patch_id: str, db: AsyncSession = Depends(get_db)):
     tr = await PatchService.get_test_run(db, patch_id)
     if not tr:
-        # Generate default pass for Demo Benchmark
         tr = await PatchService.run_tests(db, patch_id)
     return ApiResponse(data=TestRunResponse.model_validate(tr))

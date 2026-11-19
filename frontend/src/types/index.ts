@@ -61,6 +61,22 @@ export interface RepositoryFile {
 }
 
 // ---- Bugs & Issues ----
+export interface GitHubIssue {
+  id: string;
+  number: number;
+  title: string;
+  body: string;
+  state: 'open' | 'closed';
+  labels: string[];
+  author?: string;
+  assignee?: string;
+  createdAt: string;
+  updatedAt?: string;
+  closedAt?: string;
+  htmlUrl?: string;
+  commentsCount?: number;
+}
+
 export type BugSeverity = 'critical' | 'high' | 'medium' | 'low';
 export type BugCategory = 'logical_error' | 'runtime_exception' | 'security_vulnerability' | 'performance' | 'edge_case' | 'type_error' | 'static_analysis';
 export type BugStatus = 'detected' | 'investigating' | 'patch_generated' | 'patch_verified' | 'resolved' | 'dismissed';

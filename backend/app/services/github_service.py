@@ -205,6 +205,124 @@ class GitHubService:
         return None
 
     @staticmethod
+    async def fetch_repository_issues(
+        owner: str,
+        repo: str,
+        state: str = "all",
+        page: int = 1,
+        per_page: int = 100,
+        token: Optional[str] = None
+    ) -> List[Dict[str, Any]]:
+        """
+        Fetches live issues from the GitHub REST API.
+        Filters out pull requests (which GitHub returns as issues).
+        """
+        url = f"https://api.github.com/repos/{owner}/{repo}/issues?state={state}&page={page}&per_page={per_page}"
+        headers = GitHubService.get_headers(token)
+
+        async with httpx.AsyncClient(timeout=15.0) as client:
+            try:
+                res = await client.get(url, headers=headers)
+                if res.status_code == 404:
+                    raise HTTPException(
+                        status_code=404,
+                        detail=f"GitHub repository '{owner}/{repo}' not found or is private without token."
+                    )
+                if res.status_code == 403 and "rate limit" in res.text.lower():
+                    logger.warning("GitHub API rate limit exceeded when fetching issues.")
+                    raise HTTPException(
+                        status_code=429,
+                        detail="GitHub API rate limit reached. Please configure a GitHub Token in Settings."
+                    )
+                if res.status_code != 200:
+                    logger.warning("Failed to fetch issues for %s/%s (status %s): %s", owner, repo, res.status_code, res.text)
+                    return []
+
+                raw_items = res.json()
+                if not isinstance(raw_items, list):
+                    return []
+
+                issues = []
+                for item in raw_items:
+                    # Filter out PRs
+                    if item.get("pull_request"):
+                        continue
+
+                    labels = []
+                    for l in item.get("labels", []):
+                        if isinstance(l, dict) and "name" in l:
+                            labels.append(l["name"])
+                        elif isinstance(l, str):
+                            labels.append(l)
+
+                    issues.append({
+                        "id": str(item.get("id")),
+                        "number": item.get("number"),
+                        "title": item.get("title", ""),
+                        "body": item.get("body") or "",
+                        "state": item.get("state", "open"),
+                        "labels": labels,
+                        "author": item.get("user", {}).get("login") if item.get("user") else None,
+                        "assignee": item.get("assignee", {}).get("login") if item.get("assignee") else None,
+                        "createdAt": item.get("created_at"),
+                        "updatedAt": item.get("updated_at"),
+                        "closedAt": item.get("closed_at"),
+                        "htmlUrl": item.get("html_url"),
+                        "commentsCount": item.get("comments", 0),
+                    })
+                return issues
+            except HTTPException:
+                raise
+            except Exception as e:
+                logger.error("Error fetching GitHub issues: %s", str(e))
+                return []
+
+    @staticmethod
+    async def fetch_repository_branches(
+        owner: str,
+        repo: str,
+        token: Optional[str] = None
+    ) -> List[str]:
+        url = f"https://api.github.com/repos/{owner}/{repo}/branches?per_page=30"
+        headers = GitHubService.get_headers(token)
+        async with httpx.AsyncClient(timeout=10.0) as client:
+            try:
+                res = await client.get(url, headers=headers)
+                if res.status_code == 200 and isinstance(res.json(), list):
+                    return [b["name"] for b in res.json() if "name" in b]
+            except Exception as e:
+                logger.warning("Error fetching branches: %s", str(e))
+        return ["main"]
+
+    @staticmethod
+    async def fetch_recent_commits(
+        owner: str,
+        repo: str,
+        branch: str = "main",
+        limit: int = 10,
+        token: Optional[str] = None
+    ) -> List[Dict[str, Any]]:
+        url = f"https://api.github.com/repos/{owner}/{repo}/commits?sha={branch}&per_page={limit}"
+        headers = GitHubService.get_headers(token)
+        async with httpx.AsyncClient(timeout=10.0) as client:
+            try:
+                res = await client.get(url, headers=headers)
+                if res.status_code == 200 and isinstance(res.json(), list):
+                    commits = []
+                    for c in res.json():
+                        commits.append({
+                            "sha": c.get("sha", "")[:7],
+                            "fullSha": c.get("sha", ""),
+                            "message": c.get("commit", {}).get("message", "").split("\n")[0],
+                            "author": c.get("commit", {}).get("author", {}).get("name", ""),
+                            "date": c.get("commit", {}).get("author", {}).get("date", ""),
+                        })
+                    return commits
+            except Exception as e:
+                logger.warning("Error fetching commits: %s", str(e))
+        return []
+
+    @staticmethod
     async def sync_repository_from_github(
         db: AsyncSession,
         repo: Repository,

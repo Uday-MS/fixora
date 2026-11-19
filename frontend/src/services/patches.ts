@@ -22,4 +22,10 @@ export const patchService = {
 
   runTests: (patchId: string) =>
     api.post<ApiResponse<TestRun>>(`/patches/${patchId}/run-tests`),
+
+  research: (data: { repositoryId: string; issueNumber?: number; description?: string; targetFile?: string }) =>
+    api.post<ApiResponse<any>>('/patches/research', data),
+
+  draft: (data: { repositoryId: string; filePath: string; issueNumber?: number; title?: string; description?: string; userGuidance?: string }) =>
+    api.post<ApiResponse<Patch>>('/patches/draft', data),
 };

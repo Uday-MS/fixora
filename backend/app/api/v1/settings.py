@@ -8,13 +8,20 @@ router = APIRouter()
 async def get_settings():
     return ApiResponse(
         data={
-            "dockerMemoryLimit": "2048 MB",
+            "dockerMemoryLimit": settings.DOCKER_MEMORY_LIMIT,
             "egressMode": "restricted_isolated",
-            "modelProvider": "gpt-4o / gemini-1.5-pro",
+            "modelProvider": f"{settings.OPENAI_MODEL} / {settings.GEMINI_MODEL}",
             "ragVectorStore": "Qdrant",
             "sandboxStatus": "ready",
             "githubConfigured": bool(settings.GITHUB_TOKEN),
-            "executionTimeoutSeconds": 15,
-            "version": "1.0.0"
+            "executionTimeoutSeconds": settings.SANDBOX_TIMEOUT_SECONDS,
+            "version": settings.VERSION,
+            "diagnostics": settings.get_configuration_summary(),
         }
     )
+
+@router.get("/validate", response_model=ApiResponse[dict])
+async def validate_environment_and_services():
+    """Runs live connectivity and configuration checks for all platform components."""
+    results = await settings.run_live_connectivity_checks()
+    return ApiResponse(data=results)

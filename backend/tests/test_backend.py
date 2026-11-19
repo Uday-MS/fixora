@@ -191,6 +191,19 @@ async def test_settings_endpoint():
         assert res.status_code == 200
         data = res.json()["data"]
         assert data["dockerMemoryLimit"] == "2048 MB"
+        assert "diagnostics" in data
+
+@pytest.mark.asyncio
+async def test_settings_validate_endpoint():
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as ac:
+        res = await ac.get("/api/settings/validate")
+        assert res.status_code == 200
+        data = res.json()["data"]
+        assert "environmentFile" in data
+        assert "database" in data
+        assert "jwtAuthentication" in data
+        assert data["database"]["connected"] is True
+        assert data["jwtAuthentication"]["keyLengthChars"] >= 32
 
 @pytest.mark.asyncio
 async def test_autopatch_studio_endpoints():

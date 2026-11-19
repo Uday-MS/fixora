@@ -230,8 +230,9 @@ async def test_telemetry_pipeline_and_anomaly_detection():
 
 @pytest.mark.asyncio
 async def test_github_webhook_verification_and_event_handling():
+    from app.core.config import settings
     async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as ac:
-        secret = "fixora_default_github_webhook_secret"
+        secret = getattr(settings, "GITHUB_WEBHOOK_SECRET", "fixora_default_github_webhook_secret")
         payload = {
             "repository": {
                 "name": "payment-service",

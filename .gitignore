@@ -33,6 +33,9 @@ qdrant_storage/
 .env
 .env.local
 .env.*.local
+backend/.env
+frontend/.env
+*.env
 
 # Logs
 *.log

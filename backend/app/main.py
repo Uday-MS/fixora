@@ -107,6 +107,7 @@ app = FastAPI(
 app.add_middleware(
     CORSMiddleware,
     allow_origins=settings.CORS_ORIGINS,
+    allow_origin_regex=r"^https?:\/\/.*\.onrender\.com$",
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -148,6 +149,20 @@ async def observability_middleware(request: Request, call_next):
 
 # Include API v1 Router
 app.include_router(api_router, prefix=settings.API_V1_STR)
+
+@app.get("/")
+async def root():
+    return {
+        "service": "FIXORA Core API",
+        "version": settings.VERSION,
+        "status": "online",
+        "docs": "/docs",
+        "health": "/api/health",
+    }
+
+@app.get("/healthz")
+async def healthz():
+    return {"status": "ok"}
 
 @app.get("/api/health")
 async def health_check():

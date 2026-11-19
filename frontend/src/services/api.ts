@@ -14,7 +14,7 @@ class ApiClient {
   private token: string | null = null;
 
   constructor(baseUrl: string) {
-    this.baseUrl = baseUrl;
+    this.baseUrl = baseUrl.replace(/\/+$/, '');
     this.token = typeof window !== 'undefined' ? localStorage.getItem('fixora_token') : null;
   }
 

@@ -11,11 +11,16 @@ Base = declarative_base()
 def get_engine_url(url: str) -> str:
     # Ensure async driver is specified
     if url.startswith("postgresql://"):
-        return url.replace("postgresql://", "postgresql+asyncpg://", 1)
-    if url.startswith("postgres://"):
-        return url.replace("postgres://", "postgresql+asyncpg://", 1)
-    if url.startswith("sqlite:///") and not url.startswith("sqlite+aiosqlite:///"):
-        return url.replace("sqlite:///", "sqlite+aiosqlite:///", 1)
+        url = url.replace("postgresql://", "postgresql+asyncpg://", 1)
+    elif url.startswith("postgres://"):
+        url = url.replace("postgres://", "postgresql+asyncpg://", 1)
+    elif url.startswith("sqlite:///") and not url.startswith("sqlite+aiosqlite:///"):
+        url = url.replace("sqlite:///", "sqlite+aiosqlite:///", 1)
+    
+    # asyncpg expects ssl=require rather than sslmode=require
+    if "sslmode=require" in url:
+        url = url.replace("sslmode=require", "ssl=require")
+        
     return url
 
 db_url = get_engine_url(settings.DATABASE_URL)

@@ -1,6 +1,7 @@
 import os
 from pathlib import Path
-from typing import List, Optional, Dict, Any
+from typing import List, Optional, Dict, Any, Union
+from pydantic import field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 ROOT_DIR = Path(__file__).resolve().parent.parent.parent.parent
@@ -51,6 +52,10 @@ class Settings(BaseSettings):
     DOCKER_MEMORY_LIMIT: str = "2048 MB"
     SANDBOX_TIMEOUT_SECONDS: int = 15
 
+    # Deployment & Network
+    PORT: int = int(os.getenv("PORT", "8000"))
+    FRONTEND_URL: Optional[str] = None
+
     # CORS
     CORS_ORIGINS: List[str] = [
         "http://localhost:5173",
@@ -61,6 +66,21 @@ class Settings(BaseSettings):
         "http://127.0.0.1",
         "*"
     ]
+
+    @field_validator("CORS_ORIGINS", mode="before")
+    @classmethod
+    def assemble_cors_origins(cls, v: Any) -> List[str]:
+        if isinstance(v, str):
+            if v.startswith("[") and v.endswith("]"):
+                import json
+                try:
+                    return json.loads(v)
+                except Exception:
+                    pass
+            return [origin.strip() for origin in v.split(",") if origin.strip()]
+        elif isinstance(v, list):
+            return [str(origin).strip() for origin in v if str(origin).strip()]
+        return ["*"]
 
     model_config = SettingsConfigDict(
         env_file=(

@@ -3,21 +3,33 @@
 @import 'tailwindcss/utilities';
 
 @layer base {
-  html, body {
+
+  html,
+  body {
     margin: 0;
     padding: 0;
     font-family: 'Inter', system-ui, sans-serif;
     -webkit-font-smoothing: antialiased;
     -moz-osx-font-smoothing: grayscale;
   }
+
   body {
     @apply bg-background text-on-surface;
     overscroll-behavior: none;
   }
-  h1, h2, h3, h4, h5, h6 {
+
+  h1,
+  h2,
+  h3,
+  h4,
+  h5,
+  h6 {
     font-family: 'Manrope', system-ui, sans-serif;
   }
-  code, pre, .font-mono {
+
+  code,
+  pre,
+  .font-mono {
     font-family: 'JetBrains Mono', monospace;
   }
 }
@@ -26,42 +38,55 @@
   .fixora-card {
     @apply bg-surface-container-lowest rounded-xl shadow-card hover:shadow-card-hover transition-shadow;
   }
+
   .fixora-badge {
     @apply inline-flex items-center gap-1.5 px-2 py-0.5 rounded font-mono text-mono-tag;
   }
+
   .fixora-badge-critical {
     @apply fixora-badge bg-error-container text-on-error-container font-semibold;
   }
+
   .fixora-badge-warning {
     @apply fixora-badge bg-primary-fixed text-on-primary-fixed-variant font-semibold;
   }
+
   .fixora-badge-success {
     @apply fixora-badge bg-success-container text-success font-semibold;
   }
+
   .fixora-badge-neutral {
     @apply fixora-badge bg-surface-container-high text-on-surface;
   }
+
   .fixora-mono-tag {
     @apply font-mono text-mono-tag uppercase tracking-wider;
   }
+
   .fixora-section-label {
     @apply fixora-mono-tag text-on-surface-variant font-semibold;
   }
+
   .fixora-stat {
     @apply font-mono text-headline-xl font-bold text-on-surface leading-none tracking-tight;
   }
+
   .fixora-btn-primary {
     @apply h-10 px-4 rounded-lg bg-primary-container text-on-primary font-body text-label-md font-semibold hover:bg-primary transition-colors flex items-center gap-2 shadow-card;
   }
+
   .fixora-btn-secondary {
     @apply h-10 px-4 rounded-lg bg-surface-container-low border border-surface-container-highest text-on-surface font-body text-label-md font-semibold hover:bg-surface-container-high transition-colors flex items-center gap-2 shadow-card;
   }
+
   .fixora-btn-ghost {
     @apply h-10 px-4 rounded-lg text-on-surface-variant font-body text-label-md font-medium hover:bg-surface-container-high hover:text-on-surface transition-colors flex items-center gap-2;
   }
+
   .fixora-input {
     @apply w-full h-10 px-3 rounded-lg bg-surface-container-low border border-surface-container-highest font-body text-body-sm text-on-surface placeholder:text-on-surface-variant focus:outline-none focus:border-primary-container focus:ring-1 focus:ring-primary-container;
   }
+
   .fixora-table-header {
     @apply bg-surface-container-low font-mono text-mono-tag uppercase tracking-wider text-on-surface-variant;
   }
@@ -71,13 +96,16 @@
   width: 6px;
   height: 6px;
 }
+
 ::-webkit-scrollbar-track {
   background: transparent;
 }
+
 ::-webkit-scrollbar-thumb {
-  background: #dbc2b0;
+  background: #948f8c00;
   border-radius: 3px;
 }
+
 ::-webkit-scrollbar-thumb:hover {
-  background: #887364;
+  background: #7e797516;
 }

@@ -273,6 +273,15 @@ To run the complete production stack (PostgreSQL, Redis, Qdrant, Backend, and Fr
 docker compose up -d --build
 ```
 
+### 4. Deploy to Render (Production Cloud)
+
+FIXORA includes a turnkey Infrastructure-as-Code Blueprint (`render.yaml`) for 1-click deployment on Render:
+
+1. Push your code to your GitHub repository.
+2. In the [Render Dashboard](https://dashboard.render.com), click **New +** → **Blueprint**.
+3. Select your `fixora` repository and click **Apply**.
+4. For manual step-by-step instructions, environment variable setup, and database provisioning, see **[RENDER_DEPLOYMENT_MANUAL_STEPS.md](RENDER_DEPLOYMENT_MANUAL_STEPS.md)**.
+
 ---
 
 ## Connecting a GitHub Repository

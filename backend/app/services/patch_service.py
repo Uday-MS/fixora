@@ -47,12 +47,24 @@ class PatchService:
     @staticmethod
     async def approve(db: AsyncSession, patch_id: str, reviewer: str = "Engineering Lead") -> Optional[Patch]:
         patch = await PatchService.get_by_id(db, patch_id)
-        if patch:
-            patch.status = "approved"
-            patch.reviewed_at = datetime.now(timezone.utc)
-            patch.reviewed_by = reviewer
-            await db.commit()
-            await db.refresh(patch)
+        if not patch:
+            return None
+
+        # Mandatory Security Validation Gate:
+        # Prevent approval when required test validation has not completed and passed
+        tr_stmt = select(TestRun).where(TestRun.patch_id == patch_id).order_by(TestRun.started_at.desc())
+        tr = (await db.execute(tr_stmt)).scalars().first()
+        if not tr or tr.status != "passed":
+            raise HTTPException(
+                status_code=400,
+                detail="Security validation required: Patch cannot be approved without a verified, passing sandbox test validation run.",
+            )
+
+        patch.status = "approved"
+        patch.reviewed_at = datetime.now(timezone.utc)
+        patch.reviewed_by = reviewer
+        await db.commit()
+        await db.refresh(patch)
         return patch
 
     @staticmethod
@@ -77,6 +89,16 @@ class PatchService:
             raise HTTPException(
                 status_code=400,
                 detail="Human approval required: Patch must be approved by an engineer before creating a Draft GitHub PR."
+            )
+
+        # Mandatory Validation Gate:
+        # Prevent GitHub PR creation when required security validation has not completed
+        tr_stmt = select(TestRun).where(TestRun.patch_id == patch_id).order_by(TestRun.started_at.desc())
+        tr = (await db.execute(tr_stmt)).scalars().first()
+        if not tr or tr.status != "passed":
+            raise HTTPException(
+                status_code=400,
+                detail="Validation gate violation: Cannot create GitHub Pull Request without passing sandbox validation results."
             )
 
         r_stmt = select(Repository).where(Repository.id == patch.repository_id)
@@ -183,15 +205,23 @@ class PatchService:
             test_command="python -m unittest",
         )
 
+        tr_status = val_res.get("status", "failed")
+        if val_res.get("tests_passed"):
+            tr_status = "passed"
+        elif val_res.get("security_verdict") == "EXECUTION_BLOCKED_CONTAINER_REQUIRED":
+            tr_status = "unsupported"
+        else:
+            tr_status = "failed"
+
         tr = TestRun(
             patch_id=patch_id,
             command="python -m unittest",
-            status="passed" if val_res.get("tests_passed") else "failed",
-            total_tests=val_res.get("total_tests", 1),
-            passed_tests=val_res.get("passed_tests", 1),
+            status=tr_status,
+            total_tests=val_res.get("total_tests", 0),
+            passed_tests=val_res.get("passed_tests", 0),
             failed_tests=val_res.get("failed_tests", 0),
             output=val_res.get("output", "Sandbox test execution log."),
-            duration=val_res.get("duration_seconds", 0.05),
+            duration=val_res.get("duration_seconds", 0.0),
             started_at=datetime.now(timezone.utc),
             completed_at=datetime.now(timezone.utc),
         )

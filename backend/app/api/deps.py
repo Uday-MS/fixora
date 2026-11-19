@@ -33,3 +33,13 @@ async def get_current_user(
             detail="Authentication credentials were not provided or are invalid.",
         )
     return user
+
+async def require_admin(
+    user: User = Depends(get_current_user),
+) -> User:
+    if user.role != "admin":
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Administrator privileges required to perform this action.",
+        )
+    return user

@@ -5,7 +5,7 @@ from app.models.user import User
 from app.models.organization import Organization, OrganizationMember
 from app.models.workspace import Workspace
 from app.core.security import get_password_hash, verify_password, create_access_token, create_refresh_token
-from app.schemas.user import UserCreate, UserLogin, UserResponse, TokenResponse
+from app.schemas.user import UserRegister, UserLogin, UserResponse, TokenResponse
 
 class AuthService:
     @staticmethod
@@ -21,21 +21,21 @@ class AuthService:
         return result.scalars().first()
 
     @staticmethod
-    async def register(db: AsyncSession, user_in: UserCreate) -> TokenResponse:
-        existing = await AuthService.get_by_email(db, user_in.email)
+    async def register(db: AsyncSession, user_in: UserRegister) -> TokenResponse:
+        email = user_in.email.strip().lower()
+        existing = await AuthService.get_by_email(db, email)
         if existing:
             raise ValueError("A user with this email already exists.")
 
-        # If this is the first user registering on the platform, grant them admin role
-        user_check = await db.execute(select(User).limit(1))
-        is_first_user = user_check.scalars().first() is None
-        assigned_role = "admin" if is_first_user else user_in.role
-
+        # Security Policy:
+        # Public registrations are ALWAYS assigned role="user".
+        # Administrator accounts can ONLY be created through the secure environment bootstrap process.
+        # Frontend/client role input is ignored and cannot escalate privileges.
         user = User(
-            email=user_in.email.strip().lower(),
+            email=email,
             name=user_in.name.strip(),
             hashed_password=get_password_hash(user_in.password),
-            role=assigned_role,
+            role="user",
             avatar_url=user_in.avatar_url,
         )
         db.add(user)

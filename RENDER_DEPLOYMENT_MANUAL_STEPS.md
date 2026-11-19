@@ -99,8 +99,8 @@ If you prefer to configure each service manually in the Render Dashboard, follow
 | `REFRESH_TOKEN_EXPIRE_DAYS` | `7` | No |
 | `CORS_ORIGINS` | `https://fixora-ui.onrender.com` | No |
 | `FRONTEND_URL` | `https://fixora-ui.onrender.com` | No |
-| `ADMIN_EMAIL` | *(Optional)* Administrator email for startup bootstrap | No |
-| `ADMIN_PASSWORD` | *(Optional)* Administrator password for startup bootstrap | **Yes** |
+| `ADMIN_EMAIL` | Platform administrator email for secure initial bootstrap | No |
+| `ADMIN_PASSWORD` | Platform administrator password for secure initial bootstrap (min 12 chars) | **Yes** |
 | `GITHUB_TOKEN` | Enter your Personal Access Token (`ghp_...`) | **Yes** |
 | `GITHUB_WEBHOOK_SECRET` | Click **Generate** (used to verify HMAC signatures) | **Yes** |
 | `GEMINI_API_KEY` | Enter your Google Gemini API key (`AIza...`) | **Yes** |
@@ -110,6 +110,11 @@ If you prefer to configure each service manually in the Render Dashboard, follow
 | `QDRANT_URL` | *(Optional)* Remote Qdrant URL (falls back to in-memory) | No |
 | `QDRANT_API_KEY` | *(Optional)* Remote Qdrant API Key | **Yes** |
 | `REDIS_URL` | *(Optional)* Redis connection string (optional) | No |
+| `NEO4J_URI` | *(Optional)* Remote Neo4j connection URI (falls back to in-memory topology) | No |
+| `NEO4J_USER` | *(Optional)* Remote Neo4j username | No |
+| `NEO4J_PASSWORD` | *(Optional)* Remote Neo4j password | **Yes** |
+| `SANDBOX_WORKER_URL` | *(Optional)* Dedicated containerized test runner URL | No |
+| `SANDBOX_WORKER_TOKEN` | *(Optional)* Bearer token for dedicated sandbox worker | **Yes** |
 
 6. Click **Create Web Service**.
 7. Wait for the build to finish. Once deployed, note down your backend public URL (e.g. `https://fixora-api.onrender.com`).
@@ -190,25 +195,31 @@ https://fixora-api.onrender.com/api/health
   "status": "online",
   "service": "FIXORA Core API",
   "version": "1.0.0",
-  "database": "connected"
+  "database": "connected",
+  "sandbox_status": "blocked_by_configuration",
+  "sandbox_runtime": "Container isolation unavailable on web service host"
 }
 ```
+*(Note: If a Docker daemon or `SANDBOX_WORKER_URL` is configured, `sandbox_status` will report `"ready"` and `sandbox_runtime` will report the isolated container environment).*
 
-### 2. Live Configuration Diagnostics
-Open in your browser:
+### 2. Live Configuration Diagnostics (Admin Only)
+Endpoint:
 ```
 https://fixora-api.onrender.com/api/settings/validate
 ```
+*Note: This endpoint is protected by `require_admin` authorization. Pass your administrator JWT in the `Authorization: Bearer <token>` header, or inspect diagnostics directly in the Frontend Settings page as an administrator.*
+
 **Expected Result:**
 - `database.connected`: `true`
 - `jwtAuthentication.status`: `Configured and verified`
 - `github.status`: `Configured and connectivity tested` (Authenticated as `@Uday-MS`)
+- `sandbox.isolated`: `false` (or `true` if external sandbox worker configured)
 
 ### 3. Frontend Application Check
 1. Open your frontend URL: `https://fixora-ui.onrender.com`.
 2. Authenticate into the platform:
-   - **If ADMIN_EMAIL & ADMIN_PASSWORD were set:** Sign in with those credentials.
-   - **If registering the first user:** Click **Register Here** on the login screen to register your administrator account (the first registered user is automatically assigned Owner and Administrator privileges).
+   - Sign in using your `ADMIN_EMAIL` and `ADMIN_PASSWORD` configured during Step 2.
+   - *Security Note: Public registrations are strictly restricted to standard `user` accounts to eliminate privilege-escalation risks.*
 3. Verify that the Dashboard loads cleanly without errors.
 4. Navigate to **Repositories** and verify that your connected GitHub repositories appear.
 5. Open **AutoPatch Studio** (`/autopatch`) and verify that issues load directly from GitHub.

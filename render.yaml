@@ -63,6 +63,14 @@ services:
         sync: false
       - key: NEO4J_URI
         sync: false
+      - key: NEO4J_USER
+        sync: false
+      - key: NEO4J_PASSWORD
+        sync: false
+      - key: SANDBOX_WORKER_URL
+        sync: false
+      - key: SANDBOX_WORKER_TOKEN
+        sync: false
 
   # ----------------------------------------------------------------------------
   # 2. FIXORA Frontend Static Site (React 19 + TypeScript + Vite)

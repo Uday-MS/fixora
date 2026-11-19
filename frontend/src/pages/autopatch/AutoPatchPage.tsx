@@ -222,6 +222,10 @@ export function AutoPatchPage() {
   // Workflow Action 4: Human Approval Gate
   const handleApprove = async () => {
     if (!currentPatch) return;
+    if (!testRun || testRun.status !== 'passed') {
+      setErrorMsg('Mandatory validation gate: A verified, passing test run is required before approving this patch.');
+      return;
+    }
     setIsApproving(true);
     setErrorMsg(null);
     setActionSuccess(null);
@@ -664,19 +668,19 @@ export function AutoPatchPage() {
               <Card>
                 <CardHeader>
                   <CardTitle icon={<Terminal className="w-4 h-4 text-primary" />}>
-                    Docker Sandbox Verification Logs
+                    Sandbox Security Verification Logs
                   </CardTitle>
                 </CardHeader>
                 <div className="bg-inverse-surface rounded-xl p-space-md font-mono text-xs text-inverse-on-surface space-y-2">
                   <div className="flex justify-between text-inverse-on-surface/70 pb-2 border-b border-inverse-on-surface/20">
                     <span>Command: {testRun.command}</span>
-                    <span className={testRun.status === 'passed' ? 'text-success font-bold' : 'text-error font-bold'}>
+                    <span className={testRun.status === 'passed' ? 'text-success font-bold' : testRun.status === 'unsupported' ? 'text-warning font-bold' : 'text-error font-bold'}>
                       STATUS: {testRun.status.toUpperCase()} ({testRun.passedTests}/{testRun.totalTests} Passed)
                     </span>
                   </div>
                   <div className="flex justify-between text-inverse-on-surface/70">
-                    <span>Duration: {testRun.duration || 0.05}s</span>
-                    <span>Sandbox user: non-root (UID 1000)</span>
+                    <span>Duration: {testRun.duration || 0.0}s</span>
+                    <span>Isolation: {testRun.status === 'passed' ? 'Docker non-root (UID 1000)' : 'Execution Disabled on Host'}</span>
                   </div>
                   <pre className="mt-2 p-2.5 rounded bg-black/40 text-[11px] text-inverse-on-surface max-h-48 overflow-y-auto whitespace-pre-wrap leading-relaxed">
                     {testRun.output}

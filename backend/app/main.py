@@ -186,11 +186,12 @@ async def health_check():
         "service": "FIXORA Core API",
         "version": settings.VERSION,
         "sandbox_mode": sandbox_info["mode"],
+        "sandbox_status": sandbox_info["status"],
         "database": db_status,
         "components": {
             "database": db_status,
             "vector_search": vector_status,
-            "sandbox_runtime": f"operational ({sandbox_info['mode']})",
+            "sandbox_runtime": f"{sandbox_info['status']} ({sandbox_info['mode']})",
             "langgraph_orchestrator": "ready",
             "cross_encoder_reranker": "active",
         }

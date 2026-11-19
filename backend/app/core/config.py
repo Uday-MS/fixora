@@ -34,9 +34,13 @@ class Settings(BaseSettings):
     QDRANT_API_KEY: Optional[str] = None
 
     # Graph Database (Neo4j - Optional)
-    NEO4J_URI: str = "bolt://localhost:7687"
-    NEO4J_USER: str = "neo4j"
-    NEO4J_PASSWORD: str = "fixora_neo4j_password"
+    NEO4J_URI: Optional[str] = None
+    NEO4J_USER: Optional[str] = None
+    NEO4J_PASSWORD: Optional[str] = None
+
+    # Sandbox Remote Worker (Optional isolated container worker provider)
+    SANDBOX_WORKER_URL: Optional[str] = None
+    SANDBOX_WORKER_TOKEN: Optional[str] = None
 
     # GitHub Integration
     GITHUB_TOKEN: Optional[str] = None
@@ -114,6 +118,17 @@ class Settings(BaseSettings):
 
             self.CORS_ORIGINS = filtered_origins
 
+            # 3. External Services localhost sanitization in production:
+            # Prevent silent local fallback attempts to localhost on production Render hosts
+            if self.QDRANT_URL and ("localhost" in self.QDRANT_URL or "127.0.0.1" in self.QDRANT_URL):
+                self.QDRANT_URL = None
+
+            if self.REDIS_URL and ("localhost" in self.REDIS_URL or "127.0.0.1" in self.REDIS_URL):
+                self.REDIS_URL = None
+
+            if self.NEO4J_URI and ("localhost" in self.NEO4J_URI or "127.0.0.1" in self.NEO4J_URI):
+                self.NEO4J_URI = None
+
         return self
 
     model_config = SettingsConfigDict(
@@ -141,7 +156,9 @@ class Settings(BaseSettings):
             "openaiConfigured": bool(self.OPENAI_API_KEY and len(self.OPENAI_API_KEY) > 5),
             "qdrantUrl": self.QDRANT_URL or "in-memory (fallback)",
             "redisUrl": self.REDIS_URL or "disabled (optional)",
+            "neo4jUri": self.NEO4J_URI or "in-memory (fallback)",
             "sandboxMode": sandbox_info["mode"],
+            "sandboxStatus": sandbox_info["status"],
             "sandboxTimeout": self.SANDBOX_TIMEOUT_SECONDS,
             "dockerMemoryLimit": self.DOCKER_MEMORY_LIMIT,
         }
@@ -295,31 +312,50 @@ class Settings(BaseSettings):
             }
 
         # 8. Neo4j Graph DB
-        results["neo4j"] = {
-            "status": "Optional and not enabled (in-memory topology active)",
-            "uri": self.NEO4J_URI,
-            "note": "Benchmark service topology runs in-memory; external Neo4j is optional.",
-        }
+        if self.NEO4J_URI and str(self.NEO4J_URI).strip():
+            try:
+                from app.rag.graph_rag import graph_rag_service
+                if graph_rag_service.is_remote:
+                    results["neo4j"] = {
+                        "status": "Configured and connectivity tested",
+                        "mode": "remote",
+                        "uri": self.NEO4J_URI,
+                        "persistent": True,
+                    }
+                else:
+                    results["neo4j"] = {
+                        "status": "Configured with in-memory fallback",
+                        "mode": "in-memory (fallback active)",
+                        "persistent": False,
+                        "note": "Remote Neo4j unreachable; running in-memory dependency topology.",
+                    }
+            except Exception as e:
+                results["neo4j"] = {
+                    "status": "Configured with in-memory fallback",
+                    "mode": "in-memory (fallback active)",
+                    "persistent": False,
+                    "note": f"Neo4j connection error: {str(e)}",
+                }
+        else:
+            results["neo4j"] = {
+                "status": "In-memory topology active (fallback)",
+                "mode": "in-memory (fallback active)",
+                "persistent": False,
+                "note": "NEO4J_URI not set; running in-memory dependency topology.",
+            }
 
-        # 9. Docker Sandbox
+        # 9. Isolated Sandbox Runtime
         from app.orchestrator.sandbox.runner import sandbox_runner
         sandbox_info = sandbox_runner.get_runtime_status()
-        if sandbox_info["docker_available"]:
-            results["dockerSandbox"] = {
-                "status": "Configured and connectivity tested",
-                "runtime": "Docker daemon connected",
-                "mode": "isolated_docker",
-                "memoryLimit": self.DOCKER_MEMORY_LIMIT,
-                "timeoutSeconds": self.SANDBOX_TIMEOUT_SECONDS,
-            }
-        else:
-            results["dockerSandbox"] = {
-                "status": "Running native isolated process runner",
-                "runtime": "Native isolated process sandbox (Docker daemon unavailable)",
-                "mode": "native_process_runner",
-                "memoryLimit": self.DOCKER_MEMORY_LIMIT,
-                "timeoutSeconds": self.SANDBOX_TIMEOUT_SECONDS,
-            }
+        results["dockerSandbox"] = {
+            "status": sandbox_info["status"],
+            "mode": sandbox_info["mode"],
+            "runtime": sandbox_info["description"],
+            "canExecuteUntrusted": sandbox_info["can_execute_untrusted_tests"],
+            "isolated": sandbox_info["isolated"],
+            "memoryLimit": self.DOCKER_MEMORY_LIMIT,
+            "timeoutSeconds": self.SANDBOX_TIMEOUT_SECONDS,
+        }
 
         return results
 

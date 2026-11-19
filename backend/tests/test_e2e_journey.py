@@ -161,28 +161,38 @@ To prevent checkout failures during transient database locks:
         patch_id = inv_data["patchId"]
         assert patch_id is not None
 
-        # Step 9: Validate Proposed Patch in Docker Sandbox
+        # Step 9: Validate Proposed Patch in Sandbox
         test_run_res = await client.post(f"/api/patches/{patch_id}/run-tests", headers=auth_headers)
         assert test_run_res.status_code == 200
-        assert test_run_res.json()["data"]["status"] == "passed"
+        tr_data = test_run_res.json()["data"]
 
-        # Step 10: Human Approval Gate Enforcement
-        # Attempting PR creation before approval must be blocked (HTTP 400)
-        unapproved_pr_res = await client.post(f"/api/patches/{patch_id}/create-pr", headers=auth_headers)
-        assert unapproved_pr_res.status_code == 400
-        assert "Human approval required" in unapproved_pr_res.json()["detail"]
+        from app.orchestrator.sandbox.runner import sandbox_runner
+        if sandbox_runner.is_isolated_execution_available():
+            assert tr_data["status"] == "passed"
+            # Step 10: Human Approval Gate Enforcement
+            # Attempting PR creation before approval must be blocked (HTTP 400)
+            unapproved_pr_res = await client.post(f"/api/patches/{patch_id}/create-pr", headers=auth_headers)
+            assert unapproved_pr_res.status_code == 400
+            assert "Human approval required" in unapproved_pr_res.json()["detail"]
 
-        # Step 11: Human Reviews and Approves Patch
-        approve_res = await client.post(f"/api/patches/{patch_id}/approve", headers=auth_headers)
-        assert approve_res.status_code == 200
-        assert approve_res.json()["data"]["status"] == "approved"
+            # Step 11: Human Reviews and Approves Patch
+            approve_res = await client.post(f"/api/patches/{patch_id}/approve", headers=auth_headers)
+            assert approve_res.status_code == 200
+            assert approve_res.json()["data"]["status"] == "approved"
 
-        # Step 12: Safely Create Draft GitHub PR
-        pr_res = await client.post(f"/api/patches/{patch_id}/create-pr", headers=auth_headers)
-        assert pr_res.status_code == 200
-        pr_data = pr_res.json()["data"]
-        assert pr_data["prNumber"] == 409
-        assert "github.com" in pr_data["prUrl"]
+            # Step 12: Safely Create Draft GitHub PR
+            pr_res = await client.post(f"/api/patches/{patch_id}/create-pr", headers=auth_headers)
+            assert pr_res.status_code == 200
+            pr_data = pr_res.json()["data"]
+            assert pr_data["prNumber"] == 409
+            assert "github.com" in pr_data["prUrl"]
+        else:
+            # Secure enforcement: Execution is blocked by configuration without container isolation
+            assert tr_data["status"] == "unsupported"
+            # Step 10: Human Approval Gate: Cannot approve unvalidated patch
+            unapproved_res = await client.post(f"/api/patches/{patch_id}/approve", headers=auth_headers)
+            assert unapproved_res.status_code == 400
+            assert "Security validation required" in unapproved_res.json()["detail"]
 
 @pytest.mark.asyncio
 async def test_scenario_b_post_deployment_incident_lifecycle():
@@ -277,22 +287,30 @@ async def test_scenario_b_post_deployment_incident_lifecycle():
         patch_id = inv_data["patchId"]
         assert patch_id is not None
 
-        # Step 6: Verify Sandbox Validation Completed
+        # Step 6: Verify Sandbox Validation
         test_run_res = await client.post(f"/api/patches/{patch_id}/run-tests")
         assert test_run_res.status_code == 200
-        assert test_run_res.json()["data"]["status"] == "passed"
+        tr_data = test_run_res.json()["data"]
 
-        # Step 7: Human Approves Patch
-        app_res = await client.post(f"/api/patches/{patch_id}/approve")
-        assert app_res.status_code == 200
-        assert app_res.json()["data"]["status"] == "approved"
+        if sandbox_runner.is_isolated_execution_available():
+            assert tr_data["status"] == "passed"
+            # Step 7: Human Approves Patch
+            app_res = await client.post(f"/api/patches/{patch_id}/approve")
+            assert app_res.status_code == 200
+            assert app_res.json()["data"]["status"] == "approved"
 
-        # Step 8: Safe Draft PR Published
-        pr_res = await client.post(f"/api/patches/{patch_id}/create-pr")
-        assert pr_res.status_code == 200
-        pr_data = pr_res.json()["data"]
-        assert pr_data["prNumber"] == 409
-        assert pr_data["prUrl"].startswith("https://github.com/")
+            # Step 8: Safe Draft PR Published
+            pr_res = await client.post(f"/api/patches/{patch_id}/create-pr")
+            assert pr_res.status_code == 200
+            pr_data = pr_res.json()["data"]
+            assert pr_data["prNumber"] == 409
+            assert pr_data["prUrl"].startswith("https://github.com/")
+        else:
+            assert tr_data["status"] == "unsupported"
+            # Security Gate: Approval rejected on unvalidated patch
+            app_fail = await client.post(f"/api/patches/{patch_id}/approve")
+            assert app_fail.status_code == 400
+            assert "Security validation required" in app_fail.json()["detail"]
 
         # Step 9: Resolve Incident
         resolve_res = await client.post(f"/api/incidents/{incident_id}/resolve")

@@ -138,7 +138,7 @@ export interface Patch {
 }
 
 // ---- Test Runs ----
-export type TestRunStatus = 'queued' | 'running' | 'passed' | 'failed' | 'error';
+export type TestRunStatus = 'queued' | 'running' | 'passed' | 'failed' | 'error' | 'unsupported';
 
 export interface TestRun {
   id: string;

@@ -1,17 +1,52 @@
 import os
 import logging
 from typing import List, Dict, Any, Optional
+from app.core.config import settings
 
 logger = logging.getLogger("fixora.rag.graph")
 
 class GraphRAGService:
     def __init__(self):
-        self.neo4j_uri = os.getenv("NEO4J_URI", "bolt://localhost:7687")
-        self.neo4j_user = os.getenv("NEO4J_USER", "neo4j")
-        self.neo4j_password = os.getenv("NEO4J_PASSWORD", "fixora_neo4j_password")
-        self._driver = None
+        self.neo4j_uri = getattr(settings, "NEO4J_URI", None) or os.getenv("NEO4J_URI")
+        self.neo4j_user = getattr(settings, "NEO4J_USER", None) or os.getenv("NEO4J_USER")
+        self.neo4j_password = getattr(settings, "NEO4J_PASSWORD", None) or os.getenv("NEO4J_PASSWORD")
+        self.is_remote: bool = False
+        self._driver = self._init_driver()
         self._local_graph: Dict[str, Dict[str, Any]] = {}
         self._init_graph()
+
+    def _init_driver(self):
+        if self.neo4j_uri and str(self.neo4j_uri).strip():
+            try:
+                from neo4j import GraphDatabase
+                auth = (self.neo4j_user, self.neo4j_password) if (self.neo4j_user and self.neo4j_password) else None
+                driver = GraphDatabase.driver(self.neo4j_uri, auth=auth)
+                driver.verify_connectivity()
+                self.is_remote = True
+                logger.info("Connected to remote Neo4j graph database at %s", self.neo4j_uri)
+                return driver
+            except Exception as e:
+                logger.warning(
+                    "Remote Neo4j unavailable (%s). Falling back to in-memory topology graph.",
+                    str(e),
+                )
+        else:
+            logger.info("NEO4J_URI not configured. Using in-memory topology graph fallback.")
+
+        self.is_remote = False
+        return None
+
+    def get_status(self) -> Dict[str, Any]:
+        return {
+            "status": "connected (remote)" if self.is_remote else "in-memory (fallback active)",
+            "persistent": self.is_remote,
+            "mode": "remote" if self.is_remote else "in-memory",
+            "description": (
+                "Hosted Neo4j Graph Database"
+                if self.is_remote
+                else "Local in-memory software topology (ephemeral GraphRAG fallback)"
+            ),
+        }
 
     def _init_graph(self):
         """
@@ -149,3 +184,4 @@ class GraphRAGService:
 
 # Singleton instance
 graph_rag = GraphRAGService()
+graph_rag_service = graph_rag

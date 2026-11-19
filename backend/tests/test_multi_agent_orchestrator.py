@@ -50,9 +50,15 @@ if __name__ == '__main__':
     )
     assert res_valid["applied_cleanly"] is True
     assert res_valid["syntax_valid"] is True
-    assert res_valid["tests_passed"] is True
-    assert res_valid["passed_tests"] >= 1
-    assert res_valid["security_verdict"] == "ALLOWED_SAFE_SANDBOX"
+    if sandbox_runner.is_isolated_execution_available():
+        assert res_valid["tests_passed"] is True
+        assert res_valid["passed_tests"] >= 1
+        assert res_valid["security_verdict"] == "ALLOWED_SAFE_SANDBOX"
+    else:
+        # Secure host protection: Untrusted test execution is blocked without container isolation
+        assert res_valid["tests_passed"] is False
+        assert res_valid["security_verdict"] == "EXECUTION_BLOCKED_CONTAINER_REQUIRED"
+        assert res_valid["status"] == "unsupported"
 
 def test_github_pr_manager_human_approval_gate():
     # 1. Deny PR creation without explicit approval
@@ -139,8 +145,12 @@ async def test_full_langgraph_incident_orchestration():
     validation = final_state["validation_result"]
     assert validation["applied_cleanly"] is True
     assert validation["syntax_valid"] is True
-    assert validation["tests_passed"] is True
-    assert validation["passed_tests"] >= 1
+    if sandbox_runner.is_isolated_execution_available():
+        assert validation["tests_passed"] is True
+        assert validation["passed_tests"] >= 1
+    else:
+        assert validation["status"] == "unsupported"
+        assert validation["security_verdict"] == "EXECUTION_BLOCKED_CONTAINER_REQUIRED"
 
     # 7. Postmortem Agent verification
     postmortem = final_state["postmortem_report"]
@@ -200,13 +210,19 @@ async def test_investigation_api_and_db_persistence():
         assert fail_pr.status_code == 400
         assert "Human approval required" in fail_pr.json()["detail"]
 
-        # Approve patch
-        app_res = await ac.post(f"/api/patches/{patch_id}/approve")
-        assert app_res.status_code == 200
-        assert app_res.json()["data"]["status"] == "approved"
+        if sandbox_runner.is_isolated_execution_available():
+            # Approve patch
+            app_res = await ac.post(f"/api/patches/{patch_id}/approve")
+            assert app_res.status_code == 200
+            assert app_res.json()["data"]["status"] == "approved"
 
-        # Now Create PR succeeds
-        pr_res = await ac.post(f"/api/patches/{patch_id}/create-pr")
-        assert pr_res.status_code == 200
-        assert pr_res.json()["data"]["prNumber"] == 409
-        assert "github.com" in pr_res.json()["data"]["prUrl"]
+            # Now Create PR succeeds
+            pr_res = await ac.post(f"/api/patches/{patch_id}/create-pr")
+            assert pr_res.status_code == 200
+            assert pr_res.json()["data"]["prNumber"] == 409
+            assert "github.com" in pr_res.json()["data"]["prUrl"]
+        else:
+            # Approval gate blocks unvalidated patch without container isolation
+            app_res = await ac.post(f"/api/patches/{patch_id}/approve")
+            assert app_res.status_code == 400
+            assert "Security validation required" in app_res.json()["detail"]

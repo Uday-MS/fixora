@@ -111,17 +111,26 @@ async def test_patches_endpoints():
         # Run tests
         test_res = await ac.post(f"/api/patches/{patch_id}/run-tests")
         assert test_res.status_code == 200
-        assert test_res.json()["data"]["status"] == "passed"
+        tr_data = test_res.json()["data"]
 
-        # Approve
-        app_res = await ac.post(f"/api/patches/{patch_id}/approve")
-        assert app_res.status_code == 200
-        assert app_res.json()["data"]["status"] == "approved"
+        from app.orchestrator.sandbox.runner import sandbox_runner
+        if sandbox_runner.is_isolated_execution_available():
+            assert tr_data["status"] == "passed"
+            # Approve
+            app_res = await ac.post(f"/api/patches/{patch_id}/approve")
+            assert app_res.status_code == 200
+            assert app_res.json()["data"]["status"] == "approved"
 
-        # Create PR
-        pr_res = await ac.post(f"/api/patches/{patch_id}/create-pr")
-        assert pr_res.status_code == 200
-        assert pr_res.json()["data"]["prNumber"] == 409
+            # Create PR
+            pr_res = await ac.post(f"/api/patches/{patch_id}/create-pr")
+            assert pr_res.status_code == 200
+            assert pr_res.json()["data"]["prNumber"] == 409
+        else:
+            assert tr_data["status"] == "unsupported"
+            # Security Gate: Cannot approve without passing test run
+            app_fail = await ac.post(f"/api/patches/{patch_id}/approve")
+            assert app_fail.status_code == 400
+            assert "Security validation required" in app_fail.json()["detail"]
 
 @pytest.mark.asyncio
 async def test_incidents_endpoints():
@@ -196,7 +205,12 @@ async def test_settings_endpoint():
 @pytest.mark.asyncio
 async def test_settings_validate_endpoint():
     async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as ac:
-        res = await ac.get("/api/settings/validate")
+        login_res = await ac.post("/api/auth/login", json={
+            "email": "testadmin@fixora.dev",
+            "password": "TestAdminPass2026!"
+        })
+        token = login_res.json()["data"]["accessToken"]
+        res = await ac.get("/api/settings/validate", headers={"Authorization": f"Bearer {token}"})
         assert res.status_code == 200
         data = res.json()["data"]
         assert "environmentFile" in data

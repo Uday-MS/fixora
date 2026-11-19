@@ -78,8 +78,6 @@ services:
   - type: web
     name: fixora-ui
     runtime: static
-    region: oregon
-    plan: free
     rootDir: frontend
     buildCommand: npm install && npm run build
     staticPublishPath: dist

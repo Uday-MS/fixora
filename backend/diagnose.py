@@ -80,8 +80,10 @@ async def run_diagnostics():
         await test_endpoint("GET", "/api/health", "Health Check")
         
         # === AUTH ===
-        r = await test_endpoint("POST", "/api/auth/login", "Login (demo user)", 
-                                json_body={"email": "alex.vance@fixora.dev", "password": "Fixora2026!"})
+        admin_email = os.environ.get("ADMIN_EMAIL", "testadmin@fixora.dev")
+        admin_pass = os.environ.get("ADMIN_PASSWORD", "TestAdminPass2026!")
+        r = await test_endpoint("POST", "/api/auth/login", "Login", 
+                                json_body={"email": admin_email, "password": admin_pass})
         
         auth_headers = {}
         if r and r.status_code == 200:

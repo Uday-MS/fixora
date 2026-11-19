@@ -7,7 +7,7 @@ interface AuthContextType {
   workspace: Workspace | null;
   isAuthenticated: boolean;
   isLoading: boolean;
-  login: (email: string, password?: string) => Promise<void>;
+  login: (email: string, password: string) => Promise<void>;
   register: (name: string, email: string, password: string) => Promise<void>;
   logout: () => void;
   setWorkspace: (workspace: Workspace) => void;
@@ -15,29 +15,12 @@ interface AuthContextType {
 
 const AuthContext = createContext<AuthContextType | undefined>(undefined);
 
-const DEMO_USER: User = {
-  id: 'usr_demo_001',
-  email: 'alex.vance@fixora.dev',
-  name: 'Alex Vance',
-  role: 'admin',
-  createdAt: new Date().toISOString(),
-};
-
-const DEMO_WORKSPACE: Workspace = {
-  id: 'ws_demo_001',
-  name: 'Core Infra / Prod',
-  slug: 'core-infra-prod',
-  plan: 'enterprise',
-  memberCount: 6,
-  createdAt: new Date().toISOString(),
-};
-
 export function AuthProvider({ children }: { children: ReactNode }) {
-  const [user, setUser] = useState<User | null>(DEMO_USER);
-  const [workspace, setWorkspaceState] = useState<Workspace | null>(DEMO_WORKSPACE);
+  const [user, setUser] = useState<User | null>(null);
+  const [workspace, setWorkspaceState] = useState<Workspace | null>(null);
   const [isLoading, setIsLoading] = useState(true);
 
-  // Initialize auth state from real backend
+  // Initialize auth state from verified backend token
   useEffect(() => {
     async function initAuth() {
       try {
@@ -47,15 +30,24 @@ export function AuthProvider({ children }: { children: ReactNode }) {
           const meRes = await api.get<{ data: User }>('/auth/me');
           if (meRes?.data) {
             setUser(meRes.data);
+            const wsRes = await api.get<{ data: Workspace[] }>('/workspaces').catch(() => null);
+            if (wsRes?.data && wsRes.data.length > 0) {
+              setWorkspaceState(wsRes.data[0]);
+            }
+          } else {
+            api.clearToken();
+            setUser(null);
+            setWorkspaceState(null);
           }
-          const wsRes = await api.get<{ data: Workspace[] }>('/workspaces');
-          if (wsRes?.data && wsRes.data.length > 0) {
-            setWorkspaceState(wsRes.data[0]);
-          }
+        } else {
+          setUser(null);
+          setWorkspaceState(null);
         }
       } catch (err) {
-        // Fallback to active demo state if unauthenticated or offline
-        console.warn('Backend session uninitialized, using active session');
+        console.warn('Session verification failed, remaining unauthenticated:', err);
+        api.clearToken();
+        setUser(null);
+        setWorkspaceState(null);
       } finally {
         setIsLoading(false);
       }
@@ -63,36 +55,38 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     initAuth();
   }, []);
 
-  const login = useCallback(async (email: string, password?: string) => {
+  const login = useCallback(async (email: string, password: string) => {
     try {
       const res = await api.post<{ data: { accessToken: string; user: User } }>('/auth/login', {
-        email,
-        password: password || 'Fixora2026!',
+        email: email.trim(),
+        password,
       });
       if (res?.data?.accessToken) {
         api.setToken(res.data.accessToken);
         setUser(res.data.user);
-        
-        // Fetch real workspaces
+
+        // Fetch real workspaces for the authenticated user
         const wsRes = await api.get<{ data: Workspace[] }>('/workspaces').catch(() => null);
         if (wsRes?.data && wsRes.data.length > 0) {
           setWorkspaceState(wsRes.data[0]);
         }
         return;
       }
+      throw new Error('Authentication failed: no access token returned.');
     } catch (err) {
-      console.error('Real backend login error, proceeding with session:', err);
+      console.error('Authentication error:', err);
+      api.clearToken();
+      setUser(null);
+      setWorkspaceState(null);
+      throw err;
     }
-    // Safe fallback
-    setUser(DEMO_USER);
-    setWorkspaceState(DEMO_WORKSPACE);
   }, []);
 
   const register = useCallback(async (name: string, email: string, password: string) => {
     try {
       const res = await api.post<{ data: { accessToken: string; user: User } }>('/auth/register', {
-        name,
-        email,
+        name: name.trim(),
+        email: email.trim(),
         password,
       });
       if (res?.data?.accessToken) {
@@ -104,8 +98,12 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         }
         return;
       }
+      throw new Error('Registration failed: no access token returned.');
     } catch (err) {
-      console.error('Real backend registration error:', err);
+      console.error('Registration error:', err);
+      api.clearToken();
+      setUser(null);
+      setWorkspaceState(null);
       throw err;
     }
   }, []);

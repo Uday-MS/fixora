@@ -15,7 +15,7 @@ services:
     plan: free # Can be upgraded to 'starter' for 0ms cold starts & persistent RAM
     rootDir: backend
     buildCommand: pip install --upgrade pip && pip install -r requirements.txt
-    startCommand: uvicorn app.main:app --host 0.0.0.0 --port $PORT
+    startCommand: alembic upgrade head && uvicorn app.main:app --host 0.0.0.0 --port $PORT
     healthCheckPath: /api/health
     autoDeploy: true
     envVars:
@@ -36,7 +36,13 @@ services:
       - key: REFRESH_TOKEN_EXPIRE_DAYS
         value: "7"
       - key: CORS_ORIGINS
-        value: "*"
+        value: https://fixora-ui.onrender.com
+      - key: FRONTEND_URL
+        value: https://fixora-ui.onrender.com
+      - key: ADMIN_EMAIL
+        sync: false
+      - key: ADMIN_PASSWORD
+        sync: false
       - key: GITHUB_TOKEN
         sync: false
       - key: GITHUB_WEBHOOK_SECRET
@@ -50,9 +56,13 @@ services:
       - key: OPENAI_MODEL
         value: gpt-4o-mini
       - key: QDRANT_URL
-        value: http://localhost:6333
+        sync: false
+      - key: QDRANT_API_KEY
+        sync: false
       - key: REDIS_URL
-        value: redis://localhost:6379/0
+        sync: false
+      - key: NEO4J_URI
+        sync: false
 
   # ----------------------------------------------------------------------------
   # 2. FIXORA Frontend Static Site (React 19 + TypeScript + Vite)

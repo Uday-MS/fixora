@@ -29,21 +29,45 @@ def to_valid_point_id(raw_id: Any) -> str:
 
 class QdrantVectorStore:
     def __init__(self):
+        self.is_remote: bool = False
         self.client: QdrantClient = self._init_client()
         self._ensure_collection()
 
     def _init_client(self) -> QdrantClient:
-        # Try remote Qdrant connection first
-        qdrant_url = getattr(settings, "QDRANT_URL", "http://localhost:6333")
-        try:
-            client = QdrantClient(url=qdrant_url, timeout=1.5)
-            # Test connectivity
-            client.get_collections()
-            logger.info("Connected to remote Qdrant server at %s", qdrant_url)
-            return client
-        except Exception as e:
-            logger.warning("Remote Qdrant unavailable (%s). Initializing persistent in-memory Qdrant instance.", str(e))
-            return QdrantClient(":memory:")
+        # Check if remote Qdrant connection is configured
+        qdrant_url = getattr(settings, "QDRANT_URL", None)
+        api_key = getattr(settings, "QDRANT_API_KEY", None)
+
+        if qdrant_url and str(qdrant_url).strip():
+            try:
+                client = QdrantClient(url=qdrant_url, api_key=api_key, timeout=2.0)
+                # Test connectivity
+                client.get_collections()
+                self.is_remote = True
+                logger.info("Connected to remote Qdrant server at %s", qdrant_url)
+                return client
+            except Exception as e:
+                logger.warning(
+                    "Remote Qdrant unavailable (%s). Initializing in-memory vector store fallback.",
+                    str(e),
+                )
+        else:
+            logger.info("Remote QDRANT_URL not configured. Initializing in-memory vector store fallback.")
+
+        self.is_remote = False
+        return QdrantClient(":memory:")
+
+    def get_status(self) -> Dict[str, Any]:
+        return {
+            "status": "connected (remote)" if self.is_remote else "in-memory (fallback active)",
+            "persistent": self.is_remote,
+            "mode": "remote" if self.is_remote else "in-memory",
+            "description": (
+                "Hosted Qdrant vector database"
+                if self.is_remote
+                else "Local in-memory vector store (ephemeral RAG fallback)"
+            ),
+        }
 
     def _ensure_collection(self):
         try:

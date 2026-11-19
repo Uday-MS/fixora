@@ -1,7 +1,7 @@
 import os
 from pathlib import Path
 from typing import List, Optional, Dict, Any, Union
-from pydantic import field_validator
+from pydantic import field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 ROOT_DIR = Path(__file__).resolve().parent.parent.parent.parent
@@ -13,6 +13,10 @@ class Settings(BaseSettings):
     API_V1_STR: str = "/api"
     ENVIRONMENT: str = "development"
 
+    # Optional Production Admin Bootstrap (Option A)
+    ADMIN_EMAIL: Optional[str] = None
+    ADMIN_PASSWORD: Optional[str] = None
+
     # Security & JWT Auth
     JWT_SECRET: str = "fixora_super_secret_jwt_key_2026_dev_prod"
     ALGORITHM: str = "HS256"
@@ -22,14 +26,14 @@ class Settings(BaseSettings):
     # Database
     DATABASE_URL: str = "sqlite+aiosqlite:///./fixora.db"
 
-    # Cache & Queues (Redis)
-    REDIS_URL: str = "redis://localhost:6379/0"
+    # Cache & Queues (Redis - Optional)
+    REDIS_URL: Optional[str] = None
 
-    # Vector Knowledge Base (Qdrant)
-    QDRANT_URL: str = "http://localhost:6333"
+    # Vector Knowledge Base (Qdrant - Optional remote, falls back to in-memory)
+    QDRANT_URL: Optional[str] = None
     QDRANT_API_KEY: Optional[str] = None
 
-    # Graph Database (Neo4j)
+    # Graph Database (Neo4j - Optional)
     NEO4J_URI: str = "bolt://localhost:7687"
     NEO4J_USER: str = "neo4j"
     NEO4J_PASSWORD: str = "fixora_neo4j_password"
@@ -82,6 +86,36 @@ class Settings(BaseSettings):
             return [str(origin).strip() for origin in v if str(origin).strip()]
         return ["*"]
 
+    @model_validator(mode="after")
+    def validate_production_security(self) -> "Settings":
+        if self.ENVIRONMENT.lower() == "production":
+            # 1. JWT Secret Security Check
+            if not self.JWT_SECRET or len(self.JWT_SECRET) < 32 or self.JWT_SECRET == "fixora_super_secret_jwt_key_2026_dev_prod":
+                raise ValueError(
+                    "Insecure or missing JWT_SECRET in production. Set a secure 32+ character random secret."
+                )
+
+            # 2. CORS Origins Security Check: restrict to explicit origins in production
+            filtered_origins: List[str] = []
+            for origin in self.CORS_ORIGINS:
+                clean = origin.strip().rstrip("/")
+                if clean == "*" or "localhost" in clean or "127.0.0.1" in clean:
+                    continue
+                if clean and clean not in filtered_origins:
+                    filtered_origins.append(clean)
+
+            if self.FRONTEND_URL:
+                fe = self.FRONTEND_URL.strip().rstrip("/")
+                if fe and fe not in filtered_origins:
+                    filtered_origins.append(fe)
+
+            if not filtered_origins:
+                filtered_origins = ["https://fixora-ui.onrender.com"]
+
+            self.CORS_ORIGINS = filtered_origins
+
+        return self
+
     model_config = SettingsConfigDict(
         env_file=(
             str(BACKEND_DIR / ".env"),
@@ -94,16 +128,20 @@ class Settings(BaseSettings):
     def get_configuration_summary(self) -> Dict[str, Any]:
         """Returns non-sensitive configuration diagnostics."""
         has_env = (ROOT_DIR / ".env").exists() or (BACKEND_DIR / ".env").exists()
+        from app.orchestrator.sandbox.runner import sandbox_runner
+        sandbox_info = sandbox_runner.get_runtime_status()
+
         return {
             "envFileFound": has_env,
             "environment": self.ENVIRONMENT,
-            "jwtSecretConfigured": bool(self.JWT_SECRET and len(self.JWT_SECRET) >= 32),
+            "jwtSecretConfigured": bool(self.JWT_SECRET and len(self.JWT_SECRET) >= 32 and self.JWT_SECRET != "fixora_super_secret_jwt_key_2026_dev_prod"),
             "databaseType": "SQLite" if "sqlite" in self.DATABASE_URL.lower() else "PostgreSQL",
             "githubTokenConfigured": bool(self.GITHUB_TOKEN and len(self.GITHUB_TOKEN) > 5),
             "geminiConfigured": bool(self.GEMINI_API_KEY and len(self.GEMINI_API_KEY) > 5),
             "openaiConfigured": bool(self.OPENAI_API_KEY and len(self.OPENAI_API_KEY) > 5),
-            "qdrantUrl": self.QDRANT_URL,
-            "redisUrl": self.REDIS_URL,
+            "qdrantUrl": self.QDRANT_URL or "in-memory (fallback)",
+            "redisUrl": self.REDIS_URL or "disabled (optional)",
+            "sandboxMode": sandbox_info["mode"],
             "sandboxTimeout": self.SANDBOX_TIMEOUT_SECONDS,
             "dockerMemoryLimit": self.DOCKER_MEMORY_LIMIT,
         }
@@ -208,34 +246,53 @@ class Settings(BaseSettings):
             }
 
         # 6. Qdrant Vector DB
-        try:
-            import httpx
-            async with httpx.AsyncClient(timeout=1.5) as client:
-                q_res = await client.get(f"{self.QDRANT_URL}/collections")
-                if q_res.status_code == 200:
-                    results["qdrant"] = {
-                        "status": "Configured and connectivity tested",
-                        "mode": "remote",
-                        "url": self.QDRANT_URL,
-                    }
-                else:
-                    results["qdrant"] = {
-                        "status": "Configured with in-memory fallback",
-                        "mode": "in-memory (fallback active)",
-                    }
-        except Exception:
+        if self.QDRANT_URL and str(self.QDRANT_URL).strip():
+            try:
+                import httpx
+                async with httpx.AsyncClient(timeout=1.5) as client:
+                    q_res = await client.get(f"{self.QDRANT_URL}/collections")
+                    if q_res.status_code == 200:
+                        results["qdrant"] = {
+                            "status": "Configured and connectivity tested",
+                            "mode": "remote",
+                            "url": self.QDRANT_URL,
+                            "persistent": True,
+                        }
+                    else:
+                        results["qdrant"] = {
+                            "status": "Configured with in-memory fallback",
+                            "mode": "in-memory (fallback active)",
+                            "persistent": False,
+                            "note": f"Remote Qdrant returned HTTP {q_res.status_code}; running in-memory fallback.",
+                        }
+            except Exception as e:
+                results["qdrant"] = {
+                    "status": "Configured with in-memory fallback",
+                    "mode": "in-memory (fallback active)",
+                    "persistent": False,
+                    "note": f"Remote Qdrant unavailable ({str(e)}); in-memory vector store running smoothly.",
+                }
+        else:
             results["qdrant"] = {
-                "status": "Configured with in-memory fallback",
+                "status": "In-memory vector store active (fallback)",
                 "mode": "in-memory (fallback active)",
-                "note": "Remote Qdrant offline; in-memory vector store running smoothly.",
+                "persistent": False,
+                "note": "QDRANT_URL not set; running ephemeral in-memory vector store.",
             }
 
         # 7. Redis Cache
-        results["redis"] = {
-            "status": "Optional and not enabled for local development",
-            "url": self.REDIS_URL,
-            "note": "Used in Docker Compose deployments for background job queuing.",
-        }
+        if self.REDIS_URL and str(self.REDIS_URL).strip():
+            results["redis"] = {
+                "status": "Configured",
+                "url": self.REDIS_URL,
+                "note": "Used for background job queuing.",
+            }
+        else:
+            results["redis"] = {
+                "status": "Not configured (optional background worker)",
+                "url": None,
+                "note": "Redis is optional; background tasks run in-process.",
+            }
 
         # 8. Neo4j Graph DB
         results["neo4j"] = {
@@ -245,27 +302,23 @@ class Settings(BaseSettings):
         }
 
         # 9. Docker Sandbox
-        try:
-            import subprocess
-            proc = subprocess.run(["docker", "version"], capture_output=True, text=True, timeout=3.0)
-            if proc.returncode == 0:
-                results["dockerSandbox"] = {
-                    "status": "Configured and connectivity tested",
-                    "runtime": "Docker daemon connected",
-                    "memoryLimit": self.DOCKER_MEMORY_LIMIT,
-                    "timeoutSeconds": self.SANDBOX_TIMEOUT_SECONDS,
-                }
-            else:
-                results["dockerSandbox"] = {
-                    "status": "Configured with isolated process sandbox fallback",
-                    "runtime": "Native isolated process sandbox (Docker daemon restricted)",
-                    "memoryLimit": self.DOCKER_MEMORY_LIMIT,
-                    "timeoutSeconds": self.SANDBOX_TIMEOUT_SECONDS,
-                }
-        except Exception:
+        from app.orchestrator.sandbox.runner import sandbox_runner
+        sandbox_info = sandbox_runner.get_runtime_status()
+        if sandbox_info["docker_available"]:
             results["dockerSandbox"] = {
-                "status": "Configured with isolated process sandbox fallback",
-                "runtime": "Native isolated process sandbox active",
+                "status": "Configured and connectivity tested",
+                "runtime": "Docker daemon connected",
+                "mode": "isolated_docker",
+                "memoryLimit": self.DOCKER_MEMORY_LIMIT,
+                "timeoutSeconds": self.SANDBOX_TIMEOUT_SECONDS,
+            }
+        else:
+            results["dockerSandbox"] = {
+                "status": "Running native isolated process runner",
+                "runtime": "Native isolated process sandbox (Docker daemon unavailable)",
+                "mode": "native_process_runner",
+                "memoryLimit": self.DOCKER_MEMORY_LIMIT,
+                "timeoutSeconds": self.SANDBOX_TIMEOUT_SECONDS,
             }
 
         return results

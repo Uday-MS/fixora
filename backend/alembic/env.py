@@ -18,6 +18,10 @@ if config.config_file_name is not None:
 
 # Set DB URL dynamically
 sync_url = settings.DATABASE_URL.replace("+asyncpg", "").replace("+aiosqlite", "")
+if sync_url.startswith("postgres://"):
+    sync_url = sync_url.replace("postgres://", "postgresql://", 1)
+if "ssl=require" in sync_url:
+    sync_url = sync_url.replace("ssl=require", "sslmode=require")
 config.set_main_option("sqlalchemy.url", sync_url)
 
 target_metadata = Base.metadata

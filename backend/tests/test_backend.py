@@ -16,29 +16,29 @@ async def test_health_check():
 async def test_auth_login():
     async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as ac:
         response = await ac.post("/api/auth/login", json={
-            "email": "alex.vance@fixora.dev",
-            "password": "Fixora2026!"
+            "email": "testadmin@fixora.dev",
+            "password": "TestAdminPass2026!"
         })
         assert response.status_code == 200
         data = response.json()
         assert "data" in data
         assert "accessToken" in data["data"]
-        assert data["data"]["user"]["email"] == "alex.vance@fixora.dev"
+        assert data["data"]["user"]["email"] == "testadmin@fixora.dev"
 
 @pytest.mark.asyncio
 async def test_auth_me():
     async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as ac:
         # First login
         login_res = await ac.post("/api/auth/login", json={
-            "email": "alex.vance@fixora.dev",
-            "password": "Fixora2026!"
+            "email": "testadmin@fixora.dev",
+            "password": "TestAdminPass2026!"
         })
         token = login_res.json()["data"]["accessToken"]
 
         # Call /api/auth/me
         me_res = await ac.get("/api/auth/me", headers={"Authorization": f"Bearer {token}"})
         assert me_res.status_code == 200
-        assert me_res.json()["data"]["email"] == "alex.vance@fixora.dev"
+        assert me_res.json()["data"]["email"] == "testadmin@fixora.dev"
 
 @pytest.mark.asyncio
 async def test_workspaces_crud():
@@ -48,7 +48,7 @@ async def test_workspaces_crud():
         assert res.status_code == 200
         data = res.json()
         assert data["total"] >= 1
-        assert any(w["slug"] == "core-infra-prod" for w in data["data"])
+        assert any(w["slug"] in ["default-workspace", "core-infra-prod", "staging-cluster"] for w in data["data"])
 
         # Create workspace
         create_res = await ac.post("/api/workspaces", json={

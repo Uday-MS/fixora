@@ -1,7 +1,7 @@
 """
 FIXORA Safe Database Cleanup & Hygiene Script
 Removes duplicate test-polluted records created by test runs while strictly preserving:
-- User accounts (e.g. alex.vance@fixora.dev)
+- User accounts (e.g. administrator accounts)
 - Real connected GitHub repositories (e.g. Uday-MS/AI_Research_paper_exp)
 - Legitimate baseline seed data
 """

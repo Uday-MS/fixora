@@ -26,11 +26,16 @@ class AuthService:
         if existing:
             raise ValueError("A user with this email already exists.")
 
+        # If this is the first user registering on the platform, grant them admin role
+        user_check = await db.execute(select(User).limit(1))
+        is_first_user = user_check.scalars().first() is None
+        assigned_role = "admin" if is_first_user else user_in.role
+
         user = User(
-            email=user_in.email,
-            name=user_in.name,
+            email=user_in.email.strip().lower(),
+            name=user_in.name.strip(),
             hashed_password=get_password_hash(user_in.password),
-            role=user_in.role,
+            role=assigned_role,
             avatar_url=user_in.avatar_url,
         )
         db.add(user)

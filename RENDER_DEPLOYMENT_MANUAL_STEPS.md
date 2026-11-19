@@ -80,7 +80,7 @@ If you prefer to configure each service manually in the Render Dashboard, follow
      ```
    - **Start Command:**
      ```bash
-     uvicorn app.main:app --host 0.0.0.0 --port $PORT
+     alembic upgrade head && uvicorn app.main:app --host 0.0.0.0 --port $PORT
      ```
    - **Plan:** Select **Free** or **Starter**.
 4. Scroll down and expand **Advanced**:
@@ -93,19 +93,23 @@ If you prefer to configure each service manually in the Render Dashboard, follow
 | `PYTHON_VERSION` | `3.12.0` | No |
 | `ENVIRONMENT` | `production` | No |
 | `DATABASE_URL` | Paste the **Internal Database URL** from Step 1 | **Yes** |
-| `JWT_SECRET` | Click **Generate** or use: `python3 -c "import secrets; print(secrets.token_urlsafe(48))"` | **Yes** |
+| `JWT_SECRET` | Click **Generate** (minimum 32 random characters required) | **Yes** |
 | `ALGORITHM` | `HS256` | No |
 | `ACCESS_TOKEN_EXPIRE_MINUTES` | `1440` | No |
 | `REFRESH_TOKEN_EXPIRE_DAYS` | `7` | No |
-| `CORS_ORIGINS` | `*` *(or your frontend URL once created)* | No |
+| `CORS_ORIGINS` | `https://fixora-ui.onrender.com` | No |
+| `FRONTEND_URL` | `https://fixora-ui.onrender.com` | No |
+| `ADMIN_EMAIL` | *(Optional)* Administrator email for startup bootstrap | No |
+| `ADMIN_PASSWORD` | *(Optional)* Administrator password for startup bootstrap | **Yes** |
 | `GITHUB_TOKEN` | Enter your Personal Access Token (`ghp_...`) | **Yes** |
-| `GITHUB_WEBHOOK_SECRET` | Click **Generate** or generate 32-hex chars | **Yes** |
+| `GITHUB_WEBHOOK_SECRET` | Click **Generate** (used to verify HMAC signatures) | **Yes** |
 | `GEMINI_API_KEY` | Enter your Google Gemini API key (`AIza...`) | **Yes** |
 | `GEMINI_MODEL` | `gemini-flash-latest` | No |
 | `OPENAI_API_KEY` | Enter your OpenAI API key (`sk-...`) *(optional)* | **Yes** |
 | `OPENAI_MODEL` | `gpt-4o-mini` | No |
-| `QDRANT_URL` | `http://localhost:6333` *(uses in-memory fallback)* or your Qdrant Cloud URL | No |
-| `REDIS_URL` | `redis://localhost:6379/0` | No |
+| `QDRANT_URL` | *(Optional)* Remote Qdrant URL (falls back to in-memory) | No |
+| `QDRANT_API_KEY` | *(Optional)* Remote Qdrant API Key | **Yes** |
+| `REDIS_URL` | *(Optional)* Redis connection string (optional) | No |
 
 6. Click **Create Web Service**.
 7. Wait for the build to finish. Once deployed, note down your backend public URL (e.g. `https://fixora-api.onrender.com`).
@@ -202,10 +206,10 @@ https://fixora-api.onrender.com/api/settings/validate
 
 ### 3. Frontend Application Check
 1. Open your frontend URL: `https://fixora-ui.onrender.com`.
-2. Log in with the administrator credentials:
-   - **Email:** `alex.vance@fixora.dev`
-   - **Password:** `Fixora2026!`
-3. Verify that the Dashboard loads without console errors.
+2. Authenticate into the platform:
+   - **If ADMIN_EMAIL & ADMIN_PASSWORD were set:** Sign in with those credentials.
+   - **If registering the first user:** Click **Register Here** on the login screen to register your administrator account (the first registered user is automatically assigned Owner and Administrator privileges).
+3. Verify that the Dashboard loads cleanly without errors.
 4. Navigate to **Repositories** and verify that your connected GitHub repositories appear.
 5. Open **AutoPatch Studio** (`/autopatch`) and verify that issues load directly from GitHub.
 
@@ -215,8 +219,8 @@ https://fixora-api.onrender.com/api/settings/validate
 
 | Issue | Cause | Fix |
 | :--- | :--- | :--- |
-| **Backend 502 / Bad Gateway** | FastAPI crashed on startup | Check Render runtime logs under `fixora-api` → **Logs**. Ensure `DATABASE_URL` uses the Internal Connection URL and `requirements.txt` installed cleanly. |
+| **Backend 502 / Bad Gateway** | FastAPI crashed on startup | Check Render runtime logs under `fixora-api` → **Logs**. Ensure `DATABASE_URL` uses the Internal Connection URL and `requirements.txt` installed cleanly. Verify `JWT_SECRET` has at least 32 characters in production. |
 | **Frontend 404 on page refresh** | Missing SPA rewrite rule | Go to `fixora-ui` → **Redirects / Rewrites** → Ensure rule `/* -> /index.html (Rewrite)` is present. |
-| **CORS Error in Browser** | `CORS_ORIGINS` mismatch | Ensure `CORS_ORIGINS` on `fixora-api` contains your frontend domain or `*`. |
+| **CORS Error in Browser** | `CORS_ORIGINS` mismatch | Ensure `CORS_ORIGINS` on `fixora-api` is set to `https://fixora-ui.onrender.com`. |
 | **Database connection error** | PostgreSQL SSL mode parameter | FIXORA automatically converts `sslmode=require` to `ssl=require` for asyncpg. Ensure the connection string from Render is pasted completely. |
 | **Cold Starts (Free tier)** | Render Free web services spin down after 15 min | Upgrade `fixora-api` to the **Starter** plan ($7/mo) for 24/7 uptime and 0ms cold starts. |

@@ -25,72 +25,66 @@ logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("fixora")
 
 async def seed_initial_data():
-    async with AsyncSessionLocal() as session:
-        # Check if users already exist
-        user_check = await session.execute(select(User).limit(1))
-        if user_check.scalars().first():
-            return
+    """
+    Bootstrap initial platform state.
+    In production and development, if ADMIN_EMAIL and ADMIN_PASSWORD are set in the environment,
+    creates the initial administrator account and organization if the database is currently empty.
+    Never inserts hardcoded demo credentials or fake demonstration data.
+    """
+    if settings.ADMIN_EMAIL and settings.ADMIN_PASSWORD:
+        async with AsyncSessionLocal() as session:
+            user_check = await session.execute(select(User).limit(1))
+            if user_check.scalars().first():
+                return
 
-        logger.info("Seeding initial benchmark demonstration records into database...")
+            admin_email = settings.ADMIN_EMAIL.strip().lower()
+            logger.info("Bootstrapping initial administrator from environment variables (%s)...", admin_email)
 
-        # 1. User
-        admin_user = User(
-            id="usr_demo_001",
-            email="alex.vance@fixora.dev",
-            name="Alex Vance",
-            hashed_password=get_password_hash("Fixora2026!"),
-            role="admin",
-            avatar_url=None,
-            is_active=True,
-        )
-        session.add(admin_user)
-        await session.flush()
+            admin_user = User(
+                id=f"usr_{uuid.uuid4().hex[:12]}",
+                email=admin_email,
+                name="System Administrator",
+                hashed_password=get_password_hash(settings.ADMIN_PASSWORD),
+                role="admin",
+                avatar_url=None,
+                is_active=True,
+            )
+            session.add(admin_user)
+            await session.flush()
 
-        # 2. Org & Workspace
-        org = Organization(
-            id="org_demo_001",
-            name="Acme Global Engineering",
-            slug="acme-corp",
-        )
-        session.add(org)
-        await session.flush()
+            org = Organization(
+                id=f"org_{uuid.uuid4().hex[:12]}",
+                name="Fixora Organization",
+                slug="fixora-org",
+            )
+            session.add(org)
+            await session.flush()
 
-        member = OrganizationMember(
-            id="mem_demo_001",
-            organization_id=org.id,
-            user_id=admin_user.id,
-            role="owner",
-        )
-        session.add(member)
+            member = OrganizationMember(
+                id=f"mem_{uuid.uuid4().hex[:12]}",
+                organization_id=org.id,
+                user_id=admin_user.id,
+                role="owner",
+            )
+            session.add(member)
 
-        workspace = Workspace(
-            id="ws_demo_001",
-            organization_id=org.id,
-            name="Core Infra / Prod",
-            slug="core-infra-prod",
-            plan="enterprise",
-            member_count=6,
-        )
-        session.add(workspace)
-        await session.flush()
-
-        # 3. Project
-        project = Project(
-            id="proj_demo_001",
-            workspace_id=workspace.id,
-            name="Production Platform",
-            description="Autonomous SRE and code repair workspace for connected repositories.",
-            status="active",
-        )
-        session.add(project)
-        await session.flush()
-
-        await session.commit()
-        logger.info("Clean initial environment initialized.")
+            workspace = Workspace(
+                id=f"ws_{uuid.uuid4().hex[:12]}",
+                organization_id=org.id,
+                name="Default Workspace",
+                slug="default-workspace",
+                plan="enterprise",
+                member_count=1,
+            )
+            session.add(workspace)
+            await session.commit()
+            logger.info("Administrator and initial workspace bootstrapped successfully.")
+    else:
+        logger.info("No ADMIN_EMAIL/ADMIN_PASSWORD configured. Initial user can register via /auth/register or UI.")
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    # Startup: Initialize DB tables and seed default benchmark state
+    # Startup: Initialize DB tables and bootstrap administrator if configured
     await init_db()
     await seed_initial_data()
     yield
@@ -103,11 +97,15 @@ app = FastAPI(
     lifespan=lifespan,
 )
 
-# CORS
+# CORS Security:
+# In production, wildcard '*' and broad regex matches are disabled.
+# Only explicit origins from settings.CORS_ORIGINS (or FRONTEND_URL) are allowed.
+allow_origin_regex = None if settings.ENVIRONMENT.lower() == "production" else r"^https?:\/\/.*\.onrender\.com$"
+
 app.add_middleware(
     CORSMiddleware,
     allow_origins=settings.CORS_ORIGINS,
-    allow_origin_regex=r"^https?:\/\/.*\.onrender\.com$",
+    allow_origin_regex=allow_origin_regex,
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -173,23 +171,26 @@ async def health_check():
     except Exception as e:
         db_status = f"degraded: {str(e)}"
 
-    vector_status = "healthy"
+    vector_status = "in-memory (fallback active)"
     try:
         from app.rag.qdrant_store import qdrant_store
-        vector_status = "connected (remote)" if getattr(qdrant_store.client, "close", None) else "in-memory (fallback)"
+        vector_status = "connected (remote)" if qdrant_store.is_remote else "in-memory (fallback active)"
     except Exception:
-        vector_status = "operational"
+        vector_status = "in-memory (fallback active)"
+
+    from app.orchestrator.sandbox.runner import sandbox_runner
+    sandbox_info = sandbox_runner.get_runtime_status()
 
     return {
         "status": "online",
         "service": "FIXORA Core API",
         "version": settings.VERSION,
-        "sandbox_mode": "isolated_docker",
+        "sandbox_mode": sandbox_info["mode"],
         "database": db_status,
         "components": {
             "database": db_status,
             "vector_search": vector_status,
-            "sandbox_runtime": "operational (isolated_docker)",
+            "sandbox_runtime": f"operational ({sandbox_info['mode']})",
             "langgraph_orchestrator": "ready",
             "cross_encoder_reranker": "active",
         }

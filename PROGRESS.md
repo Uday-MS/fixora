@@ -44,8 +44,8 @@
   - Configured `alembic.ini` and `alembic/env.py` for async SQLAlchemy engine and target metadata
   - Unified clean migration revision `4d15956a4933_initial_complete_fixora_schema.py`
   - Ran migration `alembic upgrade head` successfully creating all tables with indexes and foreign keys
-- [x] Startup lifecycle & DB seeding:
-  - Startup lifespan initializes schema and seeds realistic benchmark dataset (`alex.vance@fixora.dev`, Acme Corp org, `payment-service`, `auth-service`, `api-gateway`, `data-pipeline` repos, active incidents, bug reports, and knowledge documents)
+- [x] Startup lifecycle & DB initialization:
+  - Startup lifespan initializes schema via Alembic migrations (`alembic upgrade head`) and supports optional initial admin bootstrap via `ADMIN_EMAIL` / `ADMIN_PASSWORD` or first-user registration. All demo accounts, hardcoded passwords, and fake entities removed for production.
 - [x] Frontend Integration:
   - `AuthContext.tsx` wired to real `/api/auth/token` and `/api/auth/me` endpoints with automatic token storage
   - `OnboardingPage.tsx` wired to real registration and workspace creation
